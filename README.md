@@ -1,4 +1,4 @@
-# router
+# Emissary-Router
 
 Pure-Python Claude Code routing gateway.
 
