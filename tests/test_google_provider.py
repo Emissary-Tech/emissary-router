@@ -125,27 +125,21 @@ def test_google_thinking_effort_mapping_preserves_minimal() -> None:
     body = {"thinking": {"effort": "minimal"}}
 
     gemini3 = GoogleProvider.to_google_request(body, "gemini-3.1-flash-lite")
-    gemini25 = GoogleProvider.to_google_request(body, "gemini-2.5-flash")
 
     assert gemini3["generationConfig"]["thinkingConfig"]["thinkingLevel"] == "minimal"
-    assert gemini25["generationConfig"]["thinkingConfig"]["thinkingBudget"] == 0
 
 
-def test_google_thinking_budget_maps_to_budget_or_level() -> None:
+def test_google_thinking_budget_maps_to_level() -> None:
     body = {"thinking": {"type": "enabled", "budget_tokens": 2048}}
 
     gemini3 = GoogleProvider.to_google_request(body, "gemini-3.1-flash-lite")
-    gemini25 = GoogleProvider.to_google_request(body, "gemini-2.5-flash")
 
     assert gemini3["generationConfig"]["thinkingConfig"]["thinkingLevel"] == "low"
-    assert gemini25["generationConfig"]["thinkingConfig"]["thinkingBudget"] == 2048
 
 
-def test_google_disabled_thinking_maps_to_minimal_or_zero() -> None:
+def test_google_disabled_thinking_maps_to_minimal() -> None:
     body = {"thinking": {"type": "disabled"}}
 
     gemini3 = GoogleProvider.to_google_request(body, "gemini-3.1-flash-lite")
-    gemini25 = GoogleProvider.to_google_request(body, "gemini-2.5-flash")
 
     assert gemini3["generationConfig"]["thinkingConfig"]["thinkingLevel"] == "minimal"
-    assert gemini25["generationConfig"]["thinkingConfig"]["thinkingBudget"] == 0

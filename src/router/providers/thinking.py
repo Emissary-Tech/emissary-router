@@ -71,18 +71,6 @@ def effort_from_budget(max_tokens: int) -> str:
     return "high"
 
 
-def budget_from_effort(effort: str) -> int:
-    return {
-        "none": 0,
-        "minimal": 0,
-        "low": 1024,
-        "medium": 4096,
-        "high": 8192,
-        "max": 24576,
-        "xhigh": 24576,
-    }.get(effort, 4096)
-
-
 def _find_effort(body: dict[str, Any]) -> str | None:
     skip_keys = {"messages", "system", "tools"}
     effort_keys = {"effort", "reasoning_effort", "thinking_effort"}

@@ -98,22 +98,13 @@ models:
     model_id: claude-haiku-4-5
 
   gemini-3.1-flash-lite:
-    provider: google
-    model_id: gemini-3.1-flash-lite
+    provider: openrouter
+    model_id: google/gemini-3.1-flash-lite
 
 classifier:
   url: https://classifier.example.com/v1/classification
   api_key: ${ROUTER_KEY}
   model: emissary-model-router-shared
-```
-
-To route Gemini through OpenRouter instead of Google native, only change that model:
-
-```yaml
-models:
-  gemini-3.1-flash-lite:
-    provider: openrouter
-    model_id: google/gemini-3.1-flash-lite
 ```
 
 The model key, such as `gemini-3.1-flash-lite`, is the name the router classifier
@@ -159,20 +150,36 @@ variables as warnings, so example files can still be checked before secrets are 
 
 ## Advanced Provider Settings
 
-Most users only need `api_key`. Advanced fields are available for proxies, gateways,
-or unusual provider naming:
+Most users only need `api_key`. Advanced fields are available when you want to point a
+built-in provider at a proxy or gateway:
 
 ```yaml
 providers:
-  company_google_proxy:
-    type: google
+  google:
     api_key: ${GOOGLE_API_KEY}
-    base_url: https://generativelanguage.googleapis.com
+    base_url: https://your-google-proxy.example.com
 ```
 
-`type` is only required when the provider name is not one of the built-in names.
 `base_url` is only required when you intentionally want to override the default
 provider endpoint.
+
+If you use a custom provider name, add `type` so `router` knows which adapter to use:
+
+```yaml
+providers:
+  google_proxy:
+    type: google
+    api_key: ${GOOGLE_API_KEY}
+    base_url: https://your-google-proxy.example.com
+
+models:
+  gemini-3.1-flash-lite:
+    provider: google_proxy
+    model_id: gemini-3.1-flash-lite
+```
+
+Built-in provider names infer their type automatically: `anthropic`, `google`, and
+`openrouter`.
 
 The only advanced cache switch in V1 is for Anthropic prefix stability:
 
@@ -258,13 +265,30 @@ For OpenRouter and Google, `router` calls the provider non-streaming and synthes
 Anthropic SSE when Claude Code requested streaming. This avoids fragile streaming
 tool-call translation.
 
+### Google Native Gemini 3
+
+Use OpenRouter for Gemini 3 Claude Code workloads that involve tool calls.
+
+Gemini 3 native function calling requires Google `thoughtSignature` values to be
+returned exactly in follow-up tool-result turns. Claude Code speaks the Anthropic
+Messages API and does not provide those Google signatures in its request history. A
+router can only attach them if the same Google-native response created the tool call,
+the router retained the signature, and the next tool-result request returns before
+that state is lost.
+
+Because model routing can switch providers between turns, native Google Gemini 3 is
+not a safe general-purpose target for Claude Code tool loops in V1. Use one of:
+
+- `openrouter` with `model_id: google/gemini-3.1-flash-lite`
+- `google` native Gemini 3 only for non-tool or explicitly experimental sessions
+
 ## Thinking
 
 `router` preserves Claude Code thinking settings where each provider supports them:
 
 - Anthropic: passes `thinking` through unchanged.
-- Google: maps Anthropic/OpenRouter-style effort or token budgets to Gemini
-  `thinkingConfig`. Gemini 3 uses `thinkingLevel`; Gemini 2.5 uses `thinkingBudget`.
+- Google: maps Anthropic/OpenRouter-style effort or token budgets to Gemini 3
+  `thinkingConfig.thinkingLevel`.
 - OpenRouter: maps Anthropic `thinking.budget_tokens` to `reasoning.max_tokens`, and
   maps effort settings to `reasoning.effort`.
 

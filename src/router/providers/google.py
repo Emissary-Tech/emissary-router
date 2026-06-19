@@ -13,7 +13,6 @@ from router.config import ProviderConfig, ResolvedModel
 from router.ir import AnthropicRequest, RequestContext
 from router.providers.base import ProviderComplete
 from router.providers.thinking import (
-    budget_from_effort,
     effort_from_budget,
     extract_reasoning_settings,
     normalize_effort,
@@ -332,15 +331,9 @@ class GoogleProvider:
         if effort is None and settings.enabled:
             effort = "medium"
 
-        if model_id.startswith("gemini-3"):
-            if effort == "none":
-                effort = "minimal"
-            return {"thinkingLevel": effort or "medium"}
-
-        budget = settings.max_tokens if settings.max_tokens is not None else budget_from_effort(effort or "medium")
-        if body.get("max_tokens"):
-            budget = max(0, min(budget, int(body["max_tokens"]) - 1))
-        return {"thinkingBudget": budget}
+        if effort == "none":
+            effort = "minimal"
+        return {"thinkingLevel": effort or "medium"}
 
     @classmethod
     def _blocks(cls, content: Any) -> list[dict[str, Any]]:

@@ -1,0 +1,7 @@
+# Copy this file to scripts/test_env.sh and fill in real keys, then run:
+#   bash scripts/integration_test.sh
+# scripts/test_env.sh is gitignored — never commit real keys.
+export ANTHROPIC_API_KEY="sk-ant-..."
+export GOOGLE_API_KEY="AIza..."
+export OPENROUTER_API_KEY="sk-or-v1-..."
+export ROUTER_KEY="your-classifier-key"
