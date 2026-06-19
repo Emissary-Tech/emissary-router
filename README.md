@@ -7,23 +7,35 @@ Anthropic Messages API; `router` chooses one of your configured models, sends th
 request to the selected provider, preserves provider prompt caching where possible,
 and records cost/cache telemetry.
 
+## Requirements
+
+- **Python 3.11 or newer.** The code uses `StrEnum` and 3.11+ typing; Python 3.10 and
+  earlier are not supported. A clean virtualenv/conda env on 3.11+ is recommended.
+- The **Claude Code CLI (`claude`) on your PATH** — required for `router code`.
+
 ## Install
 
-From a clone:
+From a clone — **edit the example config first, then install.** `install.sh` copies your
+edited files into `~/.config/router/` on the first run.
 
-```bash
-git clone <repo-url>
-cd <repo>
-./install.sh
-```
+1. Edit `config.example.yaml` (and `pricing.example.yaml`):
+   - **`classifier.url`** — the example is a placeholder; set your router-classifier endpoint.
+   - **API keys** — either keep the `${ANTHROPIC_API_KEY}` style and `export` the vars
+     before running, or paste the key strings directly into the file (no `export` needed).
+     Either way, don't commit real keys.
 
-The installer installs the local checkout in editable mode and creates default config
-files if they do not already exist:
+2. Install (editable install + copies your edited config/pricing to `~/.config/router/`,
+   first run only — afterwards edit `~/.config/router/config.yaml` directly):
 
-```text
-~/.config/router/config.yaml
-~/.config/router/pricing.yaml
-```
+   ```bash
+   ./install.sh
+   ```
+
+3. Verify:
+
+   ```bash
+   router validate-config        # expect ok: true, unresolved_env: []
+   ```
 
 ## Commands
 
