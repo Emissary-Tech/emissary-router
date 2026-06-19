@@ -1,0 +1,39 @@
+server:
+  host: 127.0.0.1
+  port: 8788
+
+router:
+  default: claude-sonnet-4.6
+  enabled:
+    - claude-sonnet-4.6
+    - claude-haiku-4.5
+  policy:
+    name: cheap_first
+    tau: 0.85
+    candidates:
+      - claude-haiku-4.5
+      - claude-sonnet-4.6
+
+providers:
+  anthropic:
+    api_key: ${ANTHROPIC_API_KEY}
+
+models:
+  claude-sonnet-4.6:
+    provider: anthropic
+    model_id: claude-sonnet-4-6
+
+  claude-haiku-4.5:
+    provider: anthropic
+    model_id: claude-haiku-4-5
+
+classifier:
+  url: https://classifier.example.com/v1/classification
+  api_key: ${ROUTER_KEY}
+  model: emissary-model-router-shared
+  timeout_seconds: 30
+
+telemetry:
+  enabled: true
+  log_path: ~/.local/state/router/events.jsonl
+  include_router_view: false

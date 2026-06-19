@@ -1,0 +1,21 @@
+pricing:
+  claude-sonnet-4.6:
+    input: 3.00
+    output: 15.00
+    cache_read: 0.30
+    cache_write_5m: 3.75
+    cache_write_1h: 6.00
+
+  claude-haiku-4.5:
+    input: 1.00
+    output: 5.00
+    cache_read: 0.10
+    cache_write_5m: 1.25
+    cache_write_1h: 2.00
+
+  gemini-3.1-flash-lite:
+    input: 0.25
+    output: 1.50
+    cache_read: 0.025
+    cache_write_5m: 0.25
+    cache_write_1h: 0.25

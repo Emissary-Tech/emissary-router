@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "router"
+version = "0.1.0"
+description = "Pure-Python Claude Code routing gateway"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+  "fastapi>=0.115",
+  "httpx>=0.27",
+  "pydantic>=2.7",
+  "pyyaml>=6.0",
+  "uvicorn>=0.30",
+]
+
+[project.scripts]
+router = "router.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/router"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
