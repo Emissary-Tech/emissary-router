@@ -4,7 +4,7 @@ import json
 import re
 from typing import Any
 
-from router.routing.view import render_router_view
+from router.routing.classifier_input import render_classifier_input
 
 
 REMINDER_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)
@@ -33,7 +33,7 @@ def _clean_user_text(blocks: list[dict[str, Any]]) -> str:
     return REMINDER_RE.sub("", "\n".join(parts)).strip()
 
 
-def request_to_view(body: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+def request_to_classifier_input(body: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     messages = body.get("messages", []) or []
     tools = body.get("tools", []) or []
 
@@ -70,7 +70,7 @@ def request_to_view(body: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     earlier = user_turns[:-1]
     tool_names = ", ".join(tool.get("name", "") for tool in tools) or "(none)"
     turn = max(len(user_turns) - 1, 0)
-    view = render_router_view(
+    classifier_input = render_classifier_input(
         task=task,
         earlier_user_turns=earlier,
         recent_steps=ordered_steps,
@@ -82,6 +82,6 @@ def request_to_view(body: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         "steps": len(ordered_steps),
         "last_error": bool(ordered_steps[-1]["error"]) if ordered_steps else False,
         "n_tools": len(tools),
-        "view_len": len(view),
+        "classifier_input_len": len(classifier_input),
     }
-    return view, metadata
+    return classifier_input, metadata

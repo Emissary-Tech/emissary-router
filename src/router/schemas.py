@@ -14,7 +14,7 @@ class AnthropicRequest:
 class RequestContext:
     request_id: str
     conversation_id: str | None
-    router_view: str
+    classifier_input: str
     requested_model: str | None
 
 

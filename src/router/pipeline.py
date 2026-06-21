@@ -13,7 +13,7 @@ from router.schemas import AnthropicRequest, RequestContext
 from router.providers.registry import build_provider
 from router.routing.classifier import ClassifierClient
 from router.routing.policy import choose_model
-from router.routing.request_view import request_to_view
+from router.routing.request_to_classifier_input import request_to_classifier_input
 from router.telemetry import JsonlTelemetry
 
 
@@ -35,8 +35,8 @@ class RouterPipeline:
     async def handle_messages(self, body: dict, headers: dict[str, str]) -> Response:
         request_id = str(uuid.uuid4())
         started_at = time.time()
-        router_view, view_metadata = request_to_view(body)
-        probabilities = await self._classifier.predict(router_view)
+        classifier_input, classifier_input_metadata = request_to_classifier_input(body)
+        probabilities = await self._classifier.predict(classifier_input)
         missing_labels = self._missing_probability_labels(probabilities)
         if missing_labels:
             return JSONResponse(
@@ -55,7 +55,7 @@ class RouterPipeline:
         context = RequestContext(
             request_id=request_id,
             conversation_id=None,
-            router_view=router_view,
+            classifier_input=classifier_input,
             requested_model=body.get("model"),
         )
 
@@ -72,9 +72,13 @@ class RouterPipeline:
                     "pricing_model": decision.model_name,
                     "route_reason": decision.reason,
                     "probabilities": decision.probabilities,
-                    "view": {
-                        **view_metadata,
-                        **({"text": router_view} if self._config.telemetry.include_router_view else {}),
+                    "classifier_input": {
+                        **classifier_input_metadata,
+                        **(
+                            {"text": classifier_input}
+                            if self._config.telemetry.include_classifier_input
+                            else {}
+                        ),
                     },
                     "usage": asdict(usage),
                     "cost_usd": self._cost_usd(decision.model_name, usage),

@@ -1,10 +1,10 @@
-"""Single source of truth for the router-visible input serialization.
+"""Single source of truth for classifier input serialization.
 
-Both the training-data builder and the live gateway/proxy import `render_router_view`
+Both the training-data builder and the live gateway/proxy import `render_classifier_input`
 from here, so what the router sees at training time and at inference time is rendered
 by the exact same code (no train/serve skew).
 
-The view:
+The classifier input:
 
     Task:                current user request
     Earlier user turns:  (multi-turn only)
@@ -45,14 +45,14 @@ def clip_task(text: str, limit: int = MAX_TASK_CHARS) -> str:
     return text[:head] + "\n …[middle omitted]… \n" + text[-tail:]
 
 
-def render_router_view(
+def render_classifier_input(
     task: str,
     earlier_user_turns: list[str] | None = None,
     recent_steps: list[dict] | None = None,
     turn: int = 0,
     tools_block: str = "(none)",
 ) -> str:
-    """Render one router-visible input.
+    """Render one classifier-visible input.
 
     recent_steps: list of {"call": str, "output": str, "error": bool}.
     """

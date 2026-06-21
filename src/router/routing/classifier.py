@@ -9,13 +9,13 @@ class ClassifierClient:
     def __init__(self, config: ClassifierConfig):
         self._config = config
 
-    async def predict(self, router_view: str) -> dict[str, float]:
+    async def predict(self, classifier_input: str) -> dict[str, float]:
         headers = {"Content-Type": "application/json"}
         if self._config.api_key:
             headers["X-API-Key"] = self._config.api_key
         payload = {
             "model": self._config.model,
-            "input": router_view,
+            "input": classifier_input,
             "data_format": "probs",
         }
         async with httpx.AsyncClient(timeout=self._config.timeout_seconds) as client:

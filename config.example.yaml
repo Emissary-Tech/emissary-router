@@ -46,4 +46,4 @@ classifier:
 telemetry:
   enabled: true
   log_path: ~/.local/state/router/events.jsonl
-  include_router_view: false
+  include_classifier_input: false

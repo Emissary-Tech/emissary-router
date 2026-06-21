@@ -166,7 +166,7 @@ class ClassifierConfig(BaseModel):
 class TelemetryConfig(BaseModel):
     enabled: bool = True
     log_path: str = "~/.local/state/router/events.jsonl"
-    include_router_view: bool = False
+    include_classifier_input: bool = False
 
 
 class AppConfig(BaseModel):
