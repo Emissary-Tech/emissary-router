@@ -9,7 +9,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from router.caching.usage import Usage
 from router.config import ProviderConfig, ResolvedModel
-from router.ir import AnthropicRequest, RequestContext
+from router.schemas import AnthropicRequest, RequestContext
 from router.providers.base import ProviderComplete
 from router.providers.thinking import extract_reasoning_settings, normalize_effort
 

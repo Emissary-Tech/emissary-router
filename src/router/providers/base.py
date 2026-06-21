@@ -7,7 +7,7 @@ from starlette.responses import Response
 
 from router.caching.usage import Usage
 from router.config import ResolvedModel
-from router.ir import AnthropicRequest, RequestContext
+from router.schemas import AnthropicRequest, RequestContext
 
 ProviderComplete = Callable[[Usage, dict[str, Any]], None]
 

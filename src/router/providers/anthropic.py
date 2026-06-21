@@ -9,7 +9,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from router.caching.usage import Usage
 from router.config import ProviderConfig, ResolvedModel
-from router.ir import AnthropicRequest, RequestContext
+from router.schemas import AnthropicRequest, RequestContext
 from router.providers.base import ProviderComplete
 
 CCH_ATTRIBUTION_LINE_RE = re.compile(r"(?m)^.*\bcch=[^\s<>\"]+.*(?:\n|$)")

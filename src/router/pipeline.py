@@ -9,7 +9,7 @@ from starlette.responses import JSONResponse, Response
 
 from router.caching.usage import Usage
 from router.config import AppConfig, PricingConfig, TokenPricing
-from router.ir import AnthropicRequest, RequestContext
+from router.schemas import AnthropicRequest, RequestContext
 from router.providers.registry import build_provider
 from router.routing.classifier import ClassifierClient
 from router.routing.policy import choose_model
