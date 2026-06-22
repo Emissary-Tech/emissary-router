@@ -31,10 +31,17 @@ Flags:
 ## Setup / inspection
 
 ```bash
+er init              # create config and set/update API keys (re-run to change keys)
 er validate-config   # check config + that required provider keys are present
-er models            # list the catalog: name, provider, model id, enabled, default
+er models            # list the catalog: enabled, chosen + supported providers, default
 er config-path       # print the resolved config path
 ```
+
+`er init` prompts for each required key, skipping any already exported in your
+environment, and writes the rest to `~/.emissary-router/.env` (chmod 600). Re-running
+it shows the current value masked — press enter to keep, or type a new one to replace.
+With `--no-prompt` (or no terminal) it just writes a template `.env`. After changing a
+key, run `er restart` so the running gateway reloads it.
 
 `er validate-config` exits non-zero and lists `missing_env` if a required key is
 absent, so it is safe to use in setup scripts. It does not make any network calls.

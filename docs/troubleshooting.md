@@ -22,6 +22,11 @@ lists exactly which keys are missing under `missing_env`.
 You can only use models in the built-in catalog, and `default` must be enabled. Run
 `er models` to see valid names and current toggles, then fix `config.yaml`.
 
+## Changed a key but nothing changed
+
+The background gateway loads keys once at startup, so a `.env` edit (or `er init`)
+doesn't reach an already-running gateway. Run `er restart` after changing a key.
+
 ## Keys in `.env` aren't picked up
 
 The loader does not override variables already exported in your shell. If you also

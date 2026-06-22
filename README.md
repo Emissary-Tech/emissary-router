@@ -7,23 +7,31 @@ cost/cache telemetry.
 ## Install
 
 ```bash
-git clone <repo-url>
-cd emissary-router
-bash install.sh
+uv tool install emissary-router      # or: pipx install emissary-router
 ```
 
-Add keys to `~/.emissary-router/.env`:
+(Plain `pip install emissary-router` also works. Before the package is published you
+can install from git: `uv tool install "git+<repo-url>"`.)
 
-```dotenv
-EMISSARY_ROUTER_API_KEY=...
-ANTHROPIC_API_KEY=...
-OPENROUTER_API_KEY=...
+Then set up config and API keys:
+
+```bash
+er init
+```
+
+`er init` creates `~/.emissary-router/config.yaml` and prompts for your keys (it skips
+any already in your environment), writing them to `~/.emissary-router/.env`. Run it
+again any time to change a key. You can also just export the keys instead:
+
+```bash
+export EMISSARY_ROUTER_API_KEY=...
+export ANTHROPIC_API_KEY=...
+export OPENROUTER_API_KEY=...
 ```
 
 Then run Claude Code through the router:
 
 ```bash
-er validate-config
 er code -- [claude args]
 ```
 
@@ -33,6 +41,9 @@ gateway keeps running after Claude Code exits; stop it with:
 ```bash
 er stop
 ```
+
+Installing from a clone instead? Run `bash install.sh` (editable install), then
+`er init`.
 
 ## Supported Models
 

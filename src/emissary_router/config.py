@@ -24,6 +24,58 @@ def user_config_path() -> Path:
     return emissary_router_home() / "config.yaml"
 
 
+def user_env_path() -> Path:
+    return emissary_router_home() / ".env"
+
+
+def ensure_user_config() -> bool:
+    """Write the default config to the user's home if it does not exist yet.
+
+    Returns True if a new file was created.
+    """
+    from emissary_router.defaults import CONFIG_TEMPLATE
+
+    path = user_config_path()
+    if path.exists():
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(CONFIG_TEMPLATE)
+    return True
+
+
+def read_env_file(path: Path) -> dict[str, str]:
+    """Parse a .env file into a dict without mutating os.environ."""
+    values: dict[str, str] = {}
+    try:
+        text = path.read_text()
+    except FileNotFoundError:
+        return values
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key:
+            values[key] = _strip_env_quotes(value.strip())
+    return values
+
+
+def write_env_file(path: Path, values: dict[str, str]) -> None:
+    """Write key=value lines and restrict permissions (the file holds secrets)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = "".join(f"{key}={value}\n" for key, value in values.items())
+    path.write_text(body)
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+
+
 def load_env_files(paths: list[Path] | None = None) -> None:
     """Load local env files without overriding already-exported variables."""
     env_paths = paths or [emissary_router_home() / ".env", Path.cwd() / ".env"]

@@ -158,13 +158,23 @@ ANTHROPIC_API_KEY=...
 OPENROUTER_API_KEY=...
 ```
 
-Only the keys for providers you actually use are required (e.g. disabling all
+The easiest way to set them is `er init`, which prompts for each key (skipping any
+already in your environment) and writes them to `~/.emissary-router/.env` with `chmod
+600`. Only the keys for providers you actually use are required (e.g. disabling all
 OpenRouter-backed models drops the need for `OPENROUTER_API_KEY`). Check with
 `er validate-config`.
 
 Precedence: variables already exported in your shell win; then
 `~/.emissary-router/.env`; then a `.env` in the current directory. The loader never
 overrides an already-set variable.
+
+### Changing a key
+
+Re-run `er init` (enter to keep each current value, or type a new one), or edit
+`~/.emissary-router/.env` directly. Then run `er restart` — the running gateway loaded
+the old key at startup and won't pick up the change until it restarts. If a key is
+exported in your shell, that value wins over `.env`, so change it where you exported
+it.
 
 ## Alternate locations
 
