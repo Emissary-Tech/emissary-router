@@ -8,15 +8,13 @@ from pathlib import Path
 
 import uvicorn
 
+from emissary_router.catalog import CATALOG
 from emissary_router.config import (
     load_config,
-    load_pricing,
-    unresolved_env_paths,
+    missing_runtime_env,
     user_config_path,
-    user_pricing_path,
 )
-from emissary_router.launch import exec_claude, gateway_status, stop_gateway
-from emissary_router.launch import ensure_gateway
+from emissary_router.launch import exec_claude, ensure_gateway, gateway_status, stop_gateway
 
 
 def _cmd_config_path(_: argparse.Namespace) -> int:
@@ -24,47 +22,55 @@ def _cmd_config_path(_: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_models(args: argparse.Namespace) -> int:
+    config = load_config(Path(args.config) if args.config else None, strict_env=False)
+    enabled = set(config.enabled_models())
+    rows = []
+    for name, spec in CATALOG.items():
+        on = name in enabled
+        resolved = config.resolve_model(name) if on else None
+        rows.append(
+            {
+                "name": name,
+                "enabled": on,
+                "provider": resolved.provider if resolved else None,
+                "model_id": resolved.model_id if resolved else None,
+                "supported_providers": sorted(spec.providers),
+                "default_provider": spec.default_provider,
+                "default": name == config.default,
+            }
+        )
+    print(json.dumps({"models": rows}, indent=2))
+    return 0
+
+
 def _cmd_validate_config(args: argparse.Namespace) -> int:
     config_path = Path(args.config) if args.config else user_config_path()
-    pricing_path = Path(args.pricing) if args.pricing else user_pricing_path()
     config = load_config(config_path, strict_env=False)
-    pricing = load_pricing(pricing_path, strict_env=False)
-    missing_prices = [
-        model_name
-        for model_name in config.models
-        if model_name not in pricing.pricing
-    ]
-    unresolved_env = {
-        "config": unresolved_env_paths(config_path),
-        "pricing": unresolved_env_paths(pricing_path),
-    }
+    missing_env = missing_runtime_env(config)
     result = {
-        "ok": not missing_prices,
-        "models": sorted(config.models),
-        "providers": sorted(config.providers),
-        "missing_prices": missing_prices,
-        "unresolved_env": unresolved_env,
+        "ok": not missing_env,
+        "config": str(config_path.expanduser()),
+        "default": config.default,
+        "confidence": config.confidence,
+        "enabled_models": config.enabled_models(),
+        "required_provider_env": config.required_provider_env(),
+        "missing_env": missing_env,
     }
     print(json.dumps(result, indent=2))
-    return 0 if not missing_prices else 2
+    return 0 if not missing_env else 2
 
 
 def _cmd_code(args: argparse.Namespace) -> int:
-    if args.config:
-        os.environ["EMISSARY_ROUTER_CONFIG"] = args.config
-    if args.pricing:
-        os.environ["EMISSARY_ROUTER_PRICING"] = args.pricing
+    _set_config_env(args.config)
     config_path = (Path(args.config) if args.config else user_config_path()).expanduser().resolve()
-    pricing_path = (Path(args.pricing) if args.pricing else user_pricing_path()).expanduser().resolve()
     config = load_config(config_path)
-    load_pricing(pricing_path)
     claude_args = list(args.claude_args)
     if claude_args and claude_args[0] == "--":
         claude_args = claude_args[1:]
     return exec_claude(
         config=config,
         config_path=config_path,
-        pricing_path=pricing_path,
         claude_command=args.claude_command,
         claude_args=claude_args,
         dry_run=args.dry_run,
@@ -72,10 +78,7 @@ def _cmd_code(args: argparse.Namespace) -> int:
 
 
 def _cmd_debug(args: argparse.Namespace) -> int:
-    if args.config:
-        os.environ["EMISSARY_ROUTER_CONFIG"] = args.config
-    if args.pricing:
-        os.environ["EMISSARY_ROUTER_PRICING"] = args.pricing
+    _set_config_env(args.config)
     config = load_config(Path(args.config) if args.config else None)
     uvicorn.run(
         "emissary_router.server:create_app",
@@ -87,15 +90,10 @@ def _cmd_debug(args: argparse.Namespace) -> int:
 
 
 def _cmd_start(args: argparse.Namespace) -> int:
-    if args.config:
-        os.environ["EMISSARY_ROUTER_CONFIG"] = args.config
-    if args.pricing:
-        os.environ["EMISSARY_ROUTER_PRICING"] = args.pricing
+    _set_config_env(args.config)
     config_path = (Path(args.config) if args.config else user_config_path()).expanduser().resolve()
-    pricing_path = (Path(args.pricing) if args.pricing else user_pricing_path()).expanduser().resolve()
     config = load_config(config_path)
-    load_pricing(pricing_path)
-    status = ensure_gateway(config, config_path, pricing_path)
+    status = ensure_gateway(config, config_path)
     print(json.dumps(status.__dict__, indent=2))
     return 0 if status.healthy else 1
 
@@ -109,8 +107,7 @@ def _cmd_restart(args: argparse.Namespace) -> int:
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
-    if args.config:
-        os.environ["EMISSARY_ROUTER_CONFIG"] = args.config
+    _set_config_env(args.config)
     config = load_config(Path(args.config) if args.config else None, strict_env=False)
     status = gateway_status(config)
     print(json.dumps(status.__dict__, indent=2))
@@ -123,36 +120,40 @@ def _cmd_stop(_: argparse.Namespace) -> int:
     return 0 if status.message in {"stopped", "stale pid file removed", "no pid file"} else 1
 
 
+def _set_config_env(config: str | None) -> None:
+    if config:
+        os.environ["EMISSARY_ROUTER_CONFIG"] = config
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="emissary-router")
+    parser = argparse.ArgumentParser(prog="er")
     sub = parser.add_subparsers(dest="command", required=True)
 
     config_path = sub.add_parser("config-path", help="Print the default config path")
     config_path.set_defaults(func=_cmd_config_path)
 
-    validate = sub.add_parser("validate-config", help="Validate config and pricing files")
+    validate = sub.add_parser("validate-config", help="Validate config and required env keys")
     validate.add_argument("--config", default=None)
-    validate.add_argument("--pricing", default=None)
     validate.set_defaults(func=_cmd_validate_config)
+
+    models = sub.add_parser("models", help="List built-in models and config toggles")
+    models.add_argument("--config", default=None)
+    models.set_defaults(func=_cmd_models)
 
     start = sub.add_parser("start", help="Start the local gateway in the background")
     start.add_argument("--config", default=None)
-    start.add_argument("--pricing", default=None)
     start.set_defaults(func=_cmd_start)
 
     restart = sub.add_parser("restart", help="Restart the background gateway")
     restart.add_argument("--config", default=None)
-    restart.add_argument("--pricing", default=None)
     restart.set_defaults(func=_cmd_restart)
 
     debug = sub.add_parser("debug", help="Run the gateway in the foreground for debugging")
     debug.add_argument("--config", default=None)
-    debug.add_argument("--pricing", default=None)
     debug.set_defaults(func=_cmd_debug)
 
     code = sub.add_parser("code", help="Launch Claude Code through Emissary Router")
     code.add_argument("--config", default=None)
-    code.add_argument("--pricing", default=None)
     code.add_argument("--claude-command", default=os.environ.get("CLAUDE_COMMAND", "claude"))
     code.add_argument("--dry-run", action="store_true", help="Print launch command and env without exec")
     code.add_argument("claude_args", nargs=argparse.REMAINDER)

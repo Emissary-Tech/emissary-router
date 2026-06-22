@@ -12,19 +12,17 @@ mkdir -p "${EMISSARY_ROUTER_HOME}"
 if [ ! -f "${EMISSARY_ROUTER_HOME}/config.yaml" ]; then
   cp config.example.yaml "${EMISSARY_ROUTER_HOME}/config.yaml"
 fi
-if [ ! -f "${EMISSARY_ROUTER_HOME}/pricing.yaml" ]; then
-  cp pricing.example.yaml "${EMISSARY_ROUTER_HOME}/pricing.yaml"
+if [ ! -f "${EMISSARY_ROUTER_HOME}/.env" ]; then
+  cp .env.example "${EMISSARY_ROUTER_HOME}/.env"
 fi
 
 cat <<EOF
-emissary-router installed.
+Emissary Router installed.
 
 Next:
-  edit ${EMISSARY_ROUTER_HOME}/config.yaml
-  edit ${EMISSARY_ROUTER_HOME}/pricing.yaml
-  emissary-router validate-config
-  emissary-router start
-  emissary-router code -- [claude args]
+  edit ${EMISSARY_ROUTER_HOME}/.env
+  er validate-config
+  er code -- [claude args]
 
 If you previously installed the old local "router" package, its command may still
 exist until you remove it:

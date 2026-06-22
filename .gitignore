@@ -3,6 +3,10 @@
 **/__pycache__/
 **/venv
 .vscode/
+.env
+*.env
+!.env.example
+
 # local test secrets
 scripts/test_env.sh
 

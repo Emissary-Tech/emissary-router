@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import os
 from pathlib import Path
 import time
 import uuid
@@ -8,7 +9,8 @@ import uuid
 from starlette.responses import JSONResponse, Response
 
 from emissary_router.caching.usage import Usage
-from emissary_router.config import AppConfig, PricingConfig, TokenPricing
+from emissary_router.catalog import CATALOG, PROVIDER_ENV, TokenPricing
+from emissary_router.config import AppConfig, ProviderConfig
 from emissary_router.schemas import AnthropicRequest, RequestContext
 from emissary_router.providers.registry import build_provider
 from emissary_router.routing.classifier import ClassifierClient
@@ -18,19 +20,35 @@ from emissary_router.telemetry import JsonlTelemetry
 
 
 class RouterPipeline:
-    def __init__(self, config: AppConfig, pricing: PricingConfig):
+    def __init__(self, config: AppConfig):
         self._config = config
-        self._pricing = pricing
         self._classifier = ClassifierClient(config.router)
-        self._providers = {
-            name: build_provider(name, provider_config)
-            for name, provider_config in config.providers.items()
-        }
+        self._providers = self._build_providers()
         self._telemetry = (
-            JsonlTelemetry(Path(config.telemetry.log_path).expanduser())
+            JsonlTelemetry(
+                Path(config.telemetry.log_path).expanduser(),
+                retention_days=config.telemetry.retention_days,
+                max_events=config.telemetry.max_events,
+            )
             if config.telemetry.enabled
             else None
         )
+
+    def _build_providers(self):
+        provider_names = {
+            self._config.resolve_model(model_name).provider
+            for model_name in self._config.enabled_models()
+        }
+        return {
+            name: build_provider(
+                name,
+                ProviderConfig(
+                    type=name,
+                    api_key=os.environ.get(PROVIDER_ENV[name]),
+                ),
+            )
+            for name in provider_names
+        }
 
     async def handle_messages(self, body: dict, headers: dict[str, str]) -> Response:
         request_id = str(uuid.uuid4())
@@ -72,14 +90,7 @@ class RouterPipeline:
                     "pricing_model": decision.model_name,
                     "route_reason": decision.reason,
                     "probabilities": decision.probabilities,
-                    "classifier_input": {
-                        **classifier_input_metadata,
-                        **(
-                            {"text": classifier_input}
-                            if self._config.telemetry.include_classifier_input
-                            else {}
-                        ),
-                    },
+                    "classifier_input": classifier_input_metadata,
                     "usage": asdict(usage),
                     "cost_usd": self._cost_usd(decision.model_name, usage),
                     "cache": {
@@ -99,16 +110,12 @@ class RouterPipeline:
         )
 
     def _missing_probability_labels(self, probabilities: dict[str, float]) -> list[str]:
-        expected = set(self._config.router.enabled)
-        expected.add(self._config.router.default)
-        expected.update(self._config.router.policy.candidates)
+        expected = set(self._config.enabled_models())
+        expected.add(self._config.default)
         return sorted(label for label in expected if label not in probabilities)
 
     def _cost_usd(self, model_name: str, usage: Usage) -> float | None:
-        price = self._pricing.pricing.get(model_name)
-        if price is None:
-            return None
-        return _cost_usd(price, usage)
+        return _cost_usd(CATALOG[model_name].pricing, usage)
 
     def _write_telemetry(self, row: dict) -> None:
         if self._telemetry is None:

@@ -2,45 +2,19 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from emissary_router.catalog import CATALOG, PROVIDER_ENV, ROUTER_API_KEY_ENV, ProviderName
 
-ENV_RE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
-UNRESOLVED_ENV_RE = re.compile(r"\$\{?[A-Za-z_][A-Za-z0-9_]*\}?")
-ProviderType = Literal["anthropic", "openrouter", "google"]
 DEFAULT_CLASSIFICATION_URL = "https://api.withemissary.com/v1/classification"
-PROVIDER_TYPES_BY_NAME: dict[str, ProviderType] = {
-    "anthropic": "anthropic",
-    "openrouter": "openrouter",
-    "google": "google",
-}
-
-
-def infer_provider_type(name: str, config: "ProviderConfig") -> ProviderType:
-    if config.type:
-        return config.type
-    if name in PROVIDER_TYPES_BY_NAME:
-        return PROVIDER_TYPES_BY_NAME[name]
-    raise ValueError(
-        f"provider '{name}' needs an explicit type; expected one of "
-        f"{sorted(set(PROVIDER_TYPES_BY_NAME.values()))}"
-    )
 
 
 def emissary_router_home() -> Path:
     return Path(os.environ.get("EMISSARY_ROUTER_HOME", "~/.emissary-router")).expanduser()
-
-
-def user_pricing_path() -> Path:
-    configured = os.environ.get("EMISSARY_ROUTER_PRICING")
-    if configured:
-        return Path(configured).expanduser()
-    return emissary_router_home() / "pricing.yaml"
 
 
 def user_config_path() -> Path:
@@ -50,40 +24,37 @@ def user_config_path() -> Path:
     return emissary_router_home() / "config.yaml"
 
 
-def _interpolate_env(value: Any) -> Any:
-    if isinstance(value, str):
-        def repl(match: re.Match[str]) -> str:
-            return os.environ.get(match.group(1), match.group(0))
+def load_env_files(paths: list[Path] | None = None) -> None:
+    """Load local env files without overriding already-exported variables."""
+    env_paths = paths or [emissary_router_home() / ".env", Path.cwd() / ".env"]
+    for path in env_paths:
+        _load_env_file(path.expanduser())
 
-        return ENV_RE.sub(repl, value)
-    if isinstance(value, list):
-        return [_interpolate_env(v) for v in value]
-    if isinstance(value, dict):
-        return {k: _interpolate_env(v) for k, v in value.items()}
+
+def _load_env_file(path: Path) -> None:
+    try:
+        text = path.read_text()
+    except FileNotFoundError:
+        return
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key or key in os.environ:
+            continue
+        os.environ[key] = _strip_env_quotes(value.strip())
+
+
+def _strip_env_quotes(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1]
     return value
-
-
-def _find_unresolved_env(value: Any, path: str = "") -> list[str]:
-    if isinstance(value, str):
-        if UNRESOLVED_ENV_RE.search(value):
-            return [path or "<root>"]
-        return []
-    if isinstance(value, list):
-        unresolved: list[str] = []
-        for index, item in enumerate(value):
-            unresolved.extend(_find_unresolved_env(item, f"{path}[{index}]"))
-        return unresolved
-    if isinstance(value, dict):
-        unresolved = []
-        for key, item in value.items():
-            child = f"{path}.{key}" if path else str(key)
-            unresolved.extend(_find_unresolved_env(item, child))
-        return unresolved
-    return []
-
-
-def unresolved_env_paths(path: Path) -> list[str]:
-    return _find_unresolved_env(_interpolate_env(_read_raw_mapping(path)))
 
 
 def _read_raw_mapping(path: Path) -> dict[str, Any]:
@@ -97,18 +68,9 @@ def _read_raw_mapping(path: Path) -> dict[str, Any]:
     return raw
 
 
-def _read_mapping(path: Path, strict_env: bool = True) -> dict[str, Any]:
-    raw = _read_raw_mapping(path)
-    interpolated = _interpolate_env(raw)
-    unresolved = _find_unresolved_env(interpolated)
-    if unresolved and strict_env:
-        raise ValueError(
-            f"{path} contains unresolved environment variables at: {', '.join(unresolved)}"
-        )
-    return interpolated
-
-
 class ServerConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     host: str = "127.0.0.1"
     port: int = 8788
     auth_key: str | None = None
@@ -121,121 +83,99 @@ class ServerConfig(BaseModel):
 
 
 class CacheConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     strip_dynamic_attribution: bool = True
 
 
 class ProviderConfig(BaseModel):
-    type: ProviderType | None = None
+    """Internal provider settings built from the catalog and environment."""
+    model_config = ConfigDict(extra="forbid")
+
+    type: ProviderName | None = None
     api_key: str | None = None
     base_url: str | None = None
     cache: CacheConfig = Field(default_factory=CacheConfig)
 
 
-class ModelProviderTargetConfig(BaseModel):
-    model_id: str
-
-
-class ModelConfig(BaseModel):
-    provider: str
-    model_id: str | None = None
-    providers: dict[str, ModelProviderTargetConfig] = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def validate_selected_provider_target(self) -> "ModelConfig":
-        if self.model_id is None and self.provider not in self.providers:
-            raise ValueError(
-                "model_id is required unless models.<name>.providers contains the selected provider"
-            )
-        return self
-
-
 class ResolvedModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str
-    provider: str
+    provider: ProviderName
     model_id: str
-
-
-class PolicyConfig(BaseModel):
-    name: Literal["cheap_first", "argmax"] = "cheap_first"
-    tau: float = 0.85
-    candidates: list[str] = Field(default_factory=list)
 
 
 class RouterConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     url: str = DEFAULT_CLASSIFICATION_URL
-    api_key: str | None = None
     router_model: str = "emissary-model-router-shared"
     timeout_seconds: float = 30
-    default: str
-    enabled: list[str]
-    policy: PolicyConfig = Field(default_factory=PolicyConfig)
 
 
 class TelemetryConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     enabled: bool = True
     log_path: str = "~/.emissary-router/events.jsonl"
-    include_classifier_input: bool = False
+    retention_days: int | None = Field(default=30, ge=0)
+    max_events: int | None = Field(default=50000, ge=0)
 
 
 class AppConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Each value is: false (off), true (on, recommended provider), or a provider
+    # name (on, that provider). Provider must be one the model supports.
+    models: dict[str, bool | ProviderName]
+    default: str
+    confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+    router: RouterConfig = Field(default_factory=RouterConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
-    router: RouterConfig
-    providers: dict[str, ProviderConfig]
-    models: dict[str, ModelConfig]
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
 
     @model_validator(mode="after")
-    def validate_references(self) -> "AppConfig":
-        for provider_name, provider in self.providers.items():
-            infer_provider_type(provider_name, provider)
-
-        missing_providers = {
-            model.provider
-            for model in self.models.values()
-            if model.provider not in self.providers
-        }
-        if missing_providers:
-            raise ValueError(f"unknown providers referenced: {sorted(missing_providers)}")
-
-        all_models = set(self.models)
-        referenced = set(self.router.enabled)
-        referenced.add(self.router.default)
-        referenced.update(self.router.policy.candidates)
-        missing_models = sorted(referenced - all_models)
-        if missing_models:
-            raise ValueError(f"unknown models referenced: {missing_models}")
+    def validate_catalog_references(self) -> "AppConfig":
+        unknown_models = sorted(set(self.models) - set(CATALOG))
+        if unknown_models:
+            raise ValueError(f"unknown models: {unknown_models}")
+        for name, value in self.models.items():
+            if isinstance(value, str):
+                supported = CATALOG[name].providers
+                if value not in supported:
+                    raise ValueError(
+                        f"provider '{value}' is not available for {name}; "
+                        f"supported: {sorted(supported)}"
+                    )
+        if self.default not in CATALOG:
+            raise ValueError(f"default model is not in the built-in catalog: {self.default}")
+        if self.default not in self.enabled_models():
+            raise ValueError("default model must be enabled")
         return self
 
+    def enabled_models(self) -> list[str]:
+        # Truthy values (true or a provider name) are enabled; false is off.
+        return [name for name in CATALOG if self.models.get(name, False)]
+
     def resolve_model(self, name: str) -> ResolvedModel:
-        model = self.models[name]
-        target = model.providers.get(model.provider)
-        model_id = target.model_id if target else model.model_id
-        if model_id is None:
-            raise ValueError(f"model {name} has no model_id for provider {model.provider}")
-        return ResolvedModel(
-            name=name,
-            provider=model.provider,
-            model_id=model_id,
-        )
+        spec = CATALOG[name]
+        value = self.models.get(name)
+        provider = value if isinstance(value, str) else spec.default_provider
+        return ResolvedModel(name=spec.name, provider=provider, model_id=spec.providers[provider])
+
+    def required_provider_env(self) -> dict[ProviderName, str]:
+        providers = {self.resolve_model(name).provider for name in self.enabled_models()}
+        return {provider: PROVIDER_ENV[provider] for provider in sorted(providers)}
 
 
-class TokenPricing(BaseModel):
-    input: float
-    output: float
-    cache_read: float
-    cache_write_5m: float
-    cache_write_1h: float | None = None
-
-
-class PricingConfig(BaseModel):
-    pricing: dict[str, TokenPricing]
+def missing_runtime_env(config: AppConfig) -> list[str]:
+    required = [ROUTER_API_KEY_ENV, *config.required_provider_env().values()]
+    return [name for name in required if not os.environ.get(name)]
 
 
 def load_config(path: Path | None = None, strict_env: bool = True) -> AppConfig:
+    del strict_env  # Kept for older call sites; config no longer interpolates secrets.
+    load_env_files()
     resolved = path or user_config_path()
-    return AppConfig.model_validate(_read_mapping(resolved, strict_env=strict_env))
-
-
-def load_pricing(path: Path | None = None, strict_env: bool = True) -> PricingConfig:
-    resolved = path or user_pricing_path()
-    return PricingConfig.model_validate(_read_mapping(resolved, strict_env=strict_env))
+    return AppConfig.model_validate(_read_raw_mapping(resolved))

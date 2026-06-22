@@ -2,6 +2,8 @@
 #   bash scripts/integration_test.sh
 # scripts/test_env.sh is gitignored — never commit real keys.
 export ANTHROPIC_API_KEY="sk-ant-..."
-export GOOGLE_API_KEY="AIza..."
 export OPENROUTER_API_KEY="sk-or-v1-..."
-export ROUTER_KEY="your-classifier-key"
+export EMISSARY_ROUTER_API_KEY="your-classifier-key"
+
+# Optional. Reserved for future native Google model targets.
+# export GOOGLE_API_KEY="AIza..."

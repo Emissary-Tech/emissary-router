@@ -3,22 +3,21 @@ from __future__ import annotations
 from fastapi import FastAPI, Request
 from starlette.responses import JSONResponse
 
-from emissary_router.config import load_config, load_pricing
+from emissary_router.config import load_config
 from emissary_router.pipeline import RouterPipeline
 
 
 def create_app() -> FastAPI:
     config = load_config()
-    pricing = load_pricing()
-    pipeline = RouterPipeline(config, pricing)
+    pipeline = RouterPipeline(config)
     app = FastAPI(title="Emissary Router")
 
     @app.get("/")
     async def health() -> dict:
         return {
             "ok": True,
-            "default": config.router.default,
-            "policy": config.router.policy.name,
+            "default": config.default,
+            "policy": "deviate_if_confident",
         }
 
     @app.post("/v1/messages")
