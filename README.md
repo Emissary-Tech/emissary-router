@@ -360,14 +360,22 @@ not a safe general-purpose target for Claude Code tool loops in V1. Use one of:
 Emissary Router preserves Claude Code thinking settings where each provider supports
 them:
 
-- Anthropic: passes `thinking` through unchanged.
-- Google: maps Anthropic/OpenRouter-style effort or token budgets to Gemini 3
-  `thinkingConfig.thinkingLevel`.
-- OpenRouter: maps Anthropic `thinking.budget_tokens` to `reasoning.max_tokens`, and
-  maps effort settings to `reasoning.effort`.
+- Anthropic: normalizes Claude Code thinking fields to the served Claude model. For
+  example, Haiku receives `adaptive` thinking as `enabled` plus a token budget because
+  it does not accept the adaptive thinking form.
+- Google: maps explicit effort, including Claude Code `output_config.effort`, to
+  Gemini `thinkingConfig.thinkingLevel`. Budget-only requests use `thinkingBudget`,
+  disabled thinking maps to `thinkingBudget: 0`, and adaptive requests without an
+  effort or budget use Gemini dynamic thinking with `thinkingBudget: -1`.
+- OpenRouter: maps effort settings to `reasoning.effort` for effort-capable models;
+  Claude Sonnet `max` maps to OpenRouter `xhigh`. Budget-only requests map to
+  `reasoning.max_tokens`. Claude Haiku is treated as budget-only, so effort requests
+  map to `reasoning.max_tokens` using `max_tokens - 1`, matching native Anthropic
+  behavior.
 
-Provider-specific limits still apply. For example, Gemini 3 does not fully disable
-thinking, so `thinking.type: disabled` maps to the closest supported minimal setting.
+Provider-specific limits still apply. For example, Gemini 3 tool loops require
+thought signatures on native Google responses, so OpenRouter remains the recommended
+Gemini path for Claude Code in V1.
 
 ## Caching
 

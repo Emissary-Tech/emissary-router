@@ -11,6 +11,7 @@ from emissary_router.caching.usage import Usage
 from emissary_router.config import ProviderConfig, ResolvedModel
 from emissary_router.schemas import AnthropicRequest, RequestContext
 from emissary_router.providers.base import ProviderComplete
+from emissary_router.providers.thinking import normalize_anthropic_thinking_for_model
 
 CCH_ATTRIBUTION_LINE_RE = re.compile(r"(?m)^.*\bcch=[^\s<>\"]+.*(?:\n|$)")
 
@@ -32,6 +33,7 @@ class AnthropicProvider:
         body = deepcopy(request.body)
         if self._config.cache.strip_dynamic_attribution:
             self._strip_cch_attribution(body)
+        thinking_changes = normalize_anthropic_thinking_for_model(body, model.name)
         body["model"] = model.model_id
         headers = self._forward_headers(request.headers)
         if self._config.api_key and "x-api-key" not in {k.lower() for k in headers}:
@@ -62,7 +64,12 @@ class AnthropicProvider:
                         self._complete(
                             on_complete,
                             self._usage_from_sse(buf.decode("utf-8", "replace")),
-                            {"http_status": status, "stream": True, "error": error},
+                            {
+                                "http_status": status,
+                                "stream": True,
+                                "error": error,
+                                "thinking_normalization": thinking_changes,
+                            },
                         )
 
             return StreamingResponse(gen(), media_type="text/event-stream")
@@ -74,7 +81,11 @@ class AnthropicProvider:
             self._complete(
                 on_complete,
                 self.usage_from_response(payload),
-                {"http_status": response.status_code, "stream": False},
+                {
+                    "http_status": response.status_code,
+                    "stream": False,
+                    "thinking_normalization": thinking_changes,
+                },
             )
             return JSONResponse(payload, status_code=response.status_code)
         except ValueError:
@@ -85,6 +96,7 @@ class AnthropicProvider:
                     "http_status": response.status_code,
                     "stream": False,
                     "error": (response.text or "(empty body)")[:300],
+                    "thinking_normalization": thinking_changes,
                 },
             )
             return Response(

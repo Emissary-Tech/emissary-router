@@ -13,9 +13,8 @@ from emissary_router.config import ProviderConfig, ResolvedModel
 from emissary_router.schemas import AnthropicRequest, RequestContext
 from emissary_router.providers.base import ProviderComplete
 from emissary_router.providers.thinking import (
-    effort_from_budget,
+    effort_reasoning_for_model,
     extract_reasoning_settings,
-    normalize_effort,
 )
 
 
@@ -33,7 +32,7 @@ class GoogleProvider:
         context: RequestContext,
         on_complete: ProviderComplete | None = None,
     ) -> Response:
-        gemini_body = self.to_google_request(request.body, model.model_id)
+        gemini_body = self.to_google_request(request.body, model.model_id, model.name)
         endpoint = f"{self._base_url}/v1beta/models/{model.model_id}:generateContent"
         headers = {
             "Content-Type": "application/json",
@@ -95,7 +94,12 @@ class GoogleProvider:
         )
 
     @classmethod
-    def to_google_request(cls, body: dict, model_id: str) -> dict[str, Any]:
+    def to_google_request(
+        cls,
+        body: dict,
+        model_id: str,
+        model_name: str | None = None,
+    ) -> dict[str, Any]:
         contents, system_instruction = cls._contents_and_system(body)
         request: dict[str, Any] = {"contents": contents or [{"role": "user", "parts": [{"text": ""}]}]}
 
@@ -107,7 +111,7 @@ class GoogleProvider:
             request["tools"] = tools
             request["toolConfig"] = {"functionCallingConfig": {"mode": "AUTO"}}
 
-        generation_config = cls._generation_config(body, model_id)
+        generation_config = cls._generation_config(body, model_id, model_name)
         if generation_config:
             request["generationConfig"] = generation_config
 
@@ -305,7 +309,12 @@ class GoogleProvider:
         return [{"functionDeclarations": declarations}] if declarations else []
 
     @classmethod
-    def _generation_config(cls, body: dict, model_id: str) -> dict[str, Any]:
+    def _generation_config(
+        cls,
+        body: dict,
+        model_id: str,
+        model_name: str | None = None,
+    ) -> dict[str, Any]:
         config: dict[str, Any] = {}
         if body.get("max_tokens") is not None:
             config["maxOutputTokens"] = body["max_tokens"]
@@ -314,25 +323,30 @@ class GoogleProvider:
         if body.get("stop_sequences"):
             config["stopSequences"] = body["stop_sequences"]
 
-        thinking_config = cls._thinking_config(body, model_id)
+        thinking_config = cls._thinking_config(body, model_id, model_name)
         if thinking_config:
             config["thinkingConfig"] = thinking_config
         return config
 
     @classmethod
-    def _thinking_config(cls, body: dict, model_id: str) -> dict[str, Any]:
+    def _thinking_config(
+        cls,
+        body: dict,
+        model_id: str,
+        model_name: str | None = None,
+    ) -> dict[str, Any]:
         settings = extract_reasoning_settings(body)
         if settings.max_tokens is None and settings.effort is None and not settings.enabled:
             return {}
 
-        effort = normalize_effort(settings.effort, "high")
-        if effort is None and settings.max_tokens is not None:
-            effort = effort_from_budget(settings.max_tokens)
-        if effort is None and settings.enabled:
-            effort = "medium"
+        if settings.enabled is False or settings.effort == "none":
+            return {"thinkingBudget": 0}
+        if settings.effort is None and settings.max_tokens is not None:
+            return {"thinkingBudget": settings.max_tokens}
+        if settings.effort is None and settings.enabled:
+            return {"thinkingBudget": -1}
 
-        if effort == "none":
-            effort = "minimal"
+        effort = effort_reasoning_for_model(settings, model_name or model_id)
         return {"thinkingLevel": effort or "medium"}
 
     @classmethod

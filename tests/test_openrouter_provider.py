@@ -47,14 +47,18 @@ def test_openrouter_request_maps_tools_reasoning_and_cache_control() -> None:
         ],
     }
 
-    req = OpenRouterProvider.to_openai_request(body, "anthropic/claude-sonnet-4.6")
+    req = OpenRouterProvider.to_openai_request(
+        body,
+        "anthropic/claude-sonnet-4.6",
+        model_name="claude-sonnet-4.6",
+    )
 
     assert req["messages"][0] == {"role": "system", "content": "You are Claude Code."}
     assert req["messages"][2]["tool_calls"][0]["function"]["name"] == "Read"
     assert req["messages"][3]["role"] == "tool"
     assert req["messages"][4]["role"] == "user"
     assert req["tools"][0]["function"]["name"] == "Read"
-    assert req["reasoning"]["effort"] == "high"
+    assert req["reasoning"]["effort"] == "xhigh"
     assert req["cache_control"] == {"type": "ephemeral"}
 
 
@@ -67,6 +71,41 @@ def test_openrouter_reasoning_effort_preserves_minimal() -> None:
     assert req["reasoning"]["effort"] == "minimal"
 
 
+def test_openrouter_reasoning_effort_clamps_from_model_capability() -> None:
+    req = OpenRouterProvider.to_openai_request(
+        {"messages": [], "thinking": {"effort": "xhigh"}},
+        "google/gemini-3.1-flash-lite",
+        model_name="gemini-3.1-flash-lite",
+    )
+
+    assert req["reasoning"]["effort"] == "high"
+
+
+def test_openrouter_sonnet_max_effort_maps_to_xhigh() -> None:
+    req = OpenRouterProvider.to_openai_request(
+        {"messages": [], "thinking": {"effort": "max"}},
+        "anthropic/claude-sonnet-4.6",
+        model_name="claude-sonnet-4.6",
+    )
+
+    assert req["reasoning"]["effort"] == "xhigh"
+
+
+def test_openrouter_haiku_effort_maps_to_budget_from_output_max_tokens() -> None:
+    req = OpenRouterProvider.to_openai_request(
+        {
+            "messages": [],
+            "max_tokens": 32000,
+            "thinking": {"effort": "max"},
+        },
+        "anthropic/claude-haiku-4.5",
+        model_name="claude-haiku-4.5",
+    )
+
+    assert req["reasoning"]["max_tokens"] == 31999
+    assert "effort" not in req["reasoning"]
+
+
 def test_openrouter_reasoning_budget_maps_to_max_tokens() -> None:
     req = OpenRouterProvider.to_openai_request(
         {"messages": [], "thinking": {"type": "enabled", "budget_tokens": 4096}},
@@ -74,6 +113,62 @@ def test_openrouter_reasoning_budget_maps_to_max_tokens() -> None:
     )
 
     assert req["reasoning"]["max_tokens"] == 4096
+
+
+def test_openrouter_gemini_budget_still_maps_to_max_tokens() -> None:
+    req = OpenRouterProvider.to_openai_request(
+        {"messages": [], "thinking": {"type": "enabled", "budget_tokens": 4096}},
+        "google/gemini-3.1-flash-lite",
+        model_name="gemini-3.1-flash-lite",
+    )
+
+    assert req["reasoning"]["max_tokens"] == 4096
+    assert "effort" not in req["reasoning"]
+
+
+def test_openrouter_output_config_effort_takes_precedence_over_budget() -> None:
+    req = OpenRouterProvider.to_openai_request(
+        {
+            "messages": [],
+            "thinking": {"type": "enabled", "budget_tokens": 4096},
+            "output_config": {"effort": "high"},
+        },
+        "google/gemini-3.1-flash-lite",
+        model_name="gemini-3.1-flash-lite",
+    )
+
+    assert req["reasoning"]["effort"] == "high"
+    assert "max_tokens" not in req["reasoning"]
+
+
+def test_openrouter_haiku_output_config_effort_maps_to_budget() -> None:
+    req = OpenRouterProvider.to_openai_request(
+        {
+            "messages": [],
+            "max_tokens": 4096,
+            "thinking": {"type": "enabled", "budget_tokens": 100},
+            "output_config": {"effort": "high"},
+        },
+        "anthropic/claude-haiku-4.5",
+        model_name="claude-haiku-4.5",
+    )
+
+    assert req["reasoning"]["max_tokens"] == 4095
+    assert "effort" not in req["reasoning"]
+
+
+def test_openrouter_disabled_thinking_keeps_reasoning_none() -> None:
+    req = OpenRouterProvider.to_openai_request(
+        {
+            "messages": [],
+            "max_tokens": 4096,
+            "thinking": {"type": "disabled"},
+        },
+        "anthropic/claude-haiku-4.5",
+        model_name="claude-haiku-4.5",
+    )
+
+    assert req["reasoning"] == {"effort": "none"}
 
 
 def test_openrouter_explicit_reasoning_config_is_preserved() -> None:

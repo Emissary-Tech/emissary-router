@@ -11,7 +11,13 @@ from emissary_router.caching.usage import Usage
 from emissary_router.config import ProviderConfig, ResolvedModel
 from emissary_router.schemas import AnthropicRequest, RequestContext
 from emissary_router.providers.base import ProviderComplete
-from emissary_router.providers.thinking import extract_reasoning_settings, normalize_effort
+from emissary_router.providers.thinking import (
+    accepts_effort_for_model,
+    extract_reasoning_settings,
+    max_effort_for_model,
+    normalize_effort,
+    thinking_budget_from_max_tokens,
+)
 
 
 class OpenRouterProvider:
@@ -30,7 +36,7 @@ class OpenRouterProvider:
         context: RequestContext,
         on_complete: ProviderComplete | None = None,
     ) -> Response:
-        oai_body = self.to_openai_request(request.body, model.model_id, context)
+        oai_body = self.to_openai_request(request.body, model.model_id, context, model.name)
         headers = {
             "Authorization": f"Bearer {self._config.api_key or ''}",
             "Content-Type": "application/json",
@@ -102,6 +108,7 @@ class OpenRouterProvider:
         body: dict[str, Any],
         model_id: str,
         context: RequestContext | None = None,
+        model_name: str | None = None,
     ) -> dict[str, Any]:
         request: dict[str, Any] = {
             "model": model_id,
@@ -119,7 +126,7 @@ class OpenRouterProvider:
             request["tools"] = tools
             request["tool_choice"] = "auto"
 
-        reasoning = cls._reasoning(body)
+        reasoning = cls._reasoning(body, model_name or model_id)
         if reasoning:
             request["reasoning"] = reasoning
 
@@ -322,13 +329,18 @@ class OpenRouterProvider:
         ]
 
     @classmethod
-    def _reasoning(cls, body: dict[str, Any]) -> dict[str, Any] | None:
+    def _reasoning(cls, body: dict[str, Any], model_name: str) -> dict[str, Any] | None:
         settings = extract_reasoning_settings(body)
         reasoning: dict[str, Any] = {}
-        if settings.max_tokens is not None:
-            reasoning["max_tokens"] = settings.max_tokens
+        if settings.effort == "none":
+            reasoning["effort"] = "none"
+        elif settings.effort is not None and not accepts_effort_for_model(model_name):
+            reasoning["max_tokens"] = thinking_budget_from_max_tokens(body)
         elif settings.effort is not None:
-            reasoning["effort"] = normalize_effort(settings.effort, "high")
+            effort = normalize_effort(settings.effort, max_effort_for_model(model_name))
+            reasoning["effort"] = "xhigh" if effort == "max" else effort
+        elif settings.max_tokens is not None:
+            reasoning["max_tokens"] = settings.max_tokens
         elif settings.enabled:
             reasoning["enabled"] = True
         if settings.exclude is not None:
