@@ -10,15 +10,15 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-from router.config import AppConfig
+from emissary_router.config import AppConfig, emissary_router_home
 
 
 def state_dir() -> Path:
-    return Path(os.environ.get("ROUTER_STATE_DIR", "~/.local/state/router")).expanduser()
+    return emissary_router_home()
 
 
 def pid_path() -> Path:
-    return state_dir() / "router.pid"
+    return state_dir() / "server.pid"
 
 
 def server_log_path() -> Path:
@@ -56,19 +56,19 @@ def ensure_gateway(config: AppConfig, config_path: Path, pricing_path: Path) -> 
         return status
     if status.pid and _process_running(status.pid):
         raise RuntimeError(
-            f"router process {status.pid} is running but {status.url} is not healthy; "
+            f"emissary-router process {status.pid} is running but {status.url} is not healthy; "
             f"see {server_log_path()}"
         )
 
     state_dir().mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
-    env["ROUTER_CONFIG"] = str(config_path)
-    env["ROUTER_PRICING"] = str(pricing_path)
+    env["EMISSARY_ROUTER_CONFIG"] = str(config_path)
+    env["EMISSARY_ROUTER_PRICING"] = str(pricing_path)
     cmd = [
         sys.executable,
         "-m",
         "uvicorn",
-        "router.server:create_app",
+        "emissary_router.server:create_app",
         "--factory",
         "--host",
         config.server.host,
@@ -91,11 +91,15 @@ def ensure_gateway(config: AppConfig, config_path: Path, pricing_path: Path) -> 
     deadline = time.time() + 15
     while time.time() < deadline:
         if proc.poll() is not None:
-            raise RuntimeError(f"router exited early with code {proc.returncode}; see {server_log_path()}")
+            raise RuntimeError(
+                f"emissary-router exited early with code {proc.returncode}; see {server_log_path()}"
+            )
         if _health_ok(status.url):
             return GatewayStatus(True, status.url, proc.pid, "started")
         time.sleep(0.2)
-    raise RuntimeError(f"router did not become healthy at {status.url}; see {server_log_path()}")
+    raise RuntimeError(
+        f"emissary-router did not become healthy at {status.url}; see {server_log_path()}"
+    )
 
 
 def stop_gateway() -> GatewayStatus:
@@ -126,8 +130,8 @@ def exec_claude(
 ) -> int:
     status = ensure_gateway(config, config_path, pricing_path)
     env = os.environ.copy()
-    env["ROUTER_CONFIG"] = str(config_path)
-    env["ROUTER_PRICING"] = str(pricing_path)
+    env["EMISSARY_ROUTER_CONFIG"] = str(config_path)
+    env["EMISSARY_ROUTER_PRICING"] = str(pricing_path)
     env["ANTHROPIC_BASE_URL"] = status.url
     if config.server.auth_key:
         env["ANTHROPIC_API_KEY"] = config.server.auth_key
@@ -136,11 +140,11 @@ def exec_claude(
 
     argv = [claude_command, *claude_args]
     if dry_run:
-        print(f"router gateway: {status.url} ({status.message})")
+        print(f"emissary-router gateway: {status.url} ({status.message})")
         print("exec:", " ".join(argv))
         print("env ANTHROPIC_BASE_URL=" + env["ANTHROPIC_BASE_URL"])
         if config.server.auth_key:
-            print("env ANTHROPIC_API_KEY=<router auth key>")
+            print("env ANTHROPIC_API_KEY=<Emissary Router auth key>")
         print("env ENABLE_TOOL_SEARCH=" + env["ENABLE_TOOL_SEARCH"])
         print("env CLAUDE_CODE_ATTRIBUTION_HEADER=" + env["CLAUDE_CODE_ATTRIBUTION_HEADER"])
         return 0
@@ -148,7 +152,10 @@ def exec_claude(
     try:
         os.execvpe(claude_command, argv, env)
     except FileNotFoundError:
-        print(f"router: could not find Claude Code command '{claude_command}'", file=sys.stderr)
+        print(
+            f"emissary-router: could not find Claude Code command '{claude_command}'",
+            file=sys.stderr,
+        )
         return 127
     return 0
 

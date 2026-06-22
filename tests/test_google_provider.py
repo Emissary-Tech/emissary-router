@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from router.config import ProviderConfig
-from router.providers.google import GoogleProvider
+from emissary_router.config import ProviderConfig
+from emissary_router.providers.google import GoogleProvider
 
 
 def test_google_request_maps_anthropic_tools_and_results() -> None:

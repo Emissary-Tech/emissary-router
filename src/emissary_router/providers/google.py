@@ -8,11 +8,11 @@ from typing import Any
 import httpx
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
-from router.caching.usage import Usage
-from router.config import ProviderConfig, ResolvedModel
-from router.schemas import AnthropicRequest, RequestContext
-from router.providers.base import ProviderComplete
-from router.providers.thinking import (
+from emissary_router.caching.usage import Usage
+from emissary_router.config import ProviderConfig, ResolvedModel
+from emissary_router.schemas import AnthropicRequest, RequestContext
+from emissary_router.providers.base import ProviderComplete
+from emissary_router.providers.thinking import (
     effort_from_budget,
     extract_reasoning_settings,
     normalize_effort,

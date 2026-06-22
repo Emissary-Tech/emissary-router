@@ -7,21 +7,21 @@ import uuid
 
 from starlette.responses import JSONResponse, Response
 
-from router.caching.usage import Usage
-from router.config import AppConfig, PricingConfig, TokenPricing
-from router.schemas import AnthropicRequest, RequestContext
-from router.providers.registry import build_provider
-from router.routing.classifier import ClassifierClient
-from router.routing.policy import choose_model
-from router.routing.request_to_classifier_input import request_to_classifier_input
-from router.telemetry import JsonlTelemetry
+from emissary_router.caching.usage import Usage
+from emissary_router.config import AppConfig, PricingConfig, TokenPricing
+from emissary_router.schemas import AnthropicRequest, RequestContext
+from emissary_router.providers.registry import build_provider
+from emissary_router.routing.classifier import ClassifierClient
+from emissary_router.routing.policy import choose_model
+from emissary_router.routing.request_to_classifier_input import request_to_classifier_input
+from emissary_router.telemetry import JsonlTelemetry
 
 
 class RouterPipeline:
     def __init__(self, config: AppConfig, pricing: PricingConfig):
         self._config = config
         self._pricing = pricing
-        self._classifier = ClassifierClient(config.classifier)
+        self._classifier = ClassifierClient(config.router)
         self._providers = {
             name: build_provider(name, provider_config)
             for name, provider_config in config.providers.items()

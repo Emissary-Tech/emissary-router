@@ -3,15 +3,15 @@ from __future__ import annotations
 from fastapi import FastAPI, Request
 from starlette.responses import JSONResponse
 
-from router.config import load_config, load_pricing
-from router.pipeline import RouterPipeline
+from emissary_router.config import load_config, load_pricing
+from emissary_router.pipeline import RouterPipeline
 
 
 def create_app() -> FastAPI:
     config = load_config()
     pricing = load_pricing()
     pipeline = RouterPipeline(config, pricing)
-    app = FastAPI(title="router")
+    app = FastAPI(title="Emissary Router")
 
     @app.get("/")
     async def health() -> dict:
@@ -28,7 +28,12 @@ def create_app() -> FastAPI:
         if config.server.auth_key:
             if not _authorized(headers, config.server.auth_key):
                 return JSONResponse(
-                    {"error": {"type": "unauthorized", "message": "invalid router auth key"}},
+                    {
+                        "error": {
+                            "type": "unauthorized",
+                            "message": "invalid Emissary Router auth key",
+                        }
+                    },
                     status_code=401,
                 )
             headers = _strip_router_auth(headers, config.server.auth_key)

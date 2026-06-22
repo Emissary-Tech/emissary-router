@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from router.providers.anthropic import AnthropicProvider
+from emissary_router.providers.anthropic import AnthropicProvider
 
 
 def test_anthropic_sse_usage_parses_cache_tokens() -> None:

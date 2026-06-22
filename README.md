@@ -1,69 +1,93 @@
-# Emissary-Router
+# Emissary Router
 
 Pure-Python Claude Code routing gateway.
 
-`router` sits between Claude Code and model providers. Claude Code still speaks the
-Anthropic Messages API; `router` chooses one of your configured models, sends the
-request to the selected provider, preserves provider prompt caching where possible,
-and records cost/cache telemetry.
+Emissary Router sits between Claude Code and model providers. Claude Code still
+speaks the Anthropic Messages API; Emissary Router chooses one of your configured
+models, sends the request to the selected provider, preserves provider prompt
+caching where possible, and records cost/cache telemetry.
 
 ## Requirements
 
-- **Python 3.11 or newer.** The code uses `StrEnum` and 3.11+ typing; Python 3.10 and
-  earlier are not supported. A clean virtualenv/conda env on 3.11+ is recommended.
-- The **Claude Code CLI (`claude`) on your PATH** — required for `router code`.
+- Python 3.10 or newer.
+- The Claude Code CLI (`claude`) on your `PATH` for `emissary-router code`.
 
 ## Install
 
-From a clone — **edit the example config first, then install.** `install.sh` copies your
-edited files into `~/.config/router/` on the first run.
+From a clone:
 
-1. Edit `config.example.yaml` (and `pricing.example.yaml`):
-   - **`classifier.url`** — the example is a placeholder; set your router-classifier endpoint.
-   - **API keys** — either keep the `${ANTHROPIC_API_KEY}` style and `export` the vars
-     before running, or paste the key strings directly into the file (no `export` needed).
-     Either way, don't commit real keys.
+```bash
+git clone <repo-url>
+cd <repo>
+./install.sh
+```
 
-2. Install (editable install + copies your edited config/pricing to `~/.config/router/`,
-   first run only — afterwards edit `~/.config/router/config.yaml` directly):
+The installer performs an editable install and creates default files in one place:
 
-   ```bash
-   ./install.sh
-   ```
+```text
+~/.emissary-router/
+  config.yaml
+  pricing.yaml
+  events.jsonl
+  server.log
+  server.pid
+```
 
-3. Verify:
+Then edit:
 
-   ```bash
-   router validate-config        # expect ok: true, unresolved_env: []
-   ```
+```bash
+~/.emissary-router/config.yaml
+~/.emissary-router/pricing.yaml
+```
+
+Verify:
+
+```bash
+emissary-router validate-config
+```
+
+If you installed an older local build that exposed a `router` command, that command
+can remain until the old editable package is removed:
+
+```bash
+python -m pip uninstall router
+```
+
+The new command is `emissary-router`.
 
 ## Commands
 
 ```bash
-router validate-config
-router start
-router status
-router restart
-router stop
-router code -- [claude args]
+emissary-router validate-config
+emissary-router start
+emissary-router status
+emissary-router restart
+emissary-router stop
+emissary-router code -- [claude args]
 ```
 
-`router start` starts the local gateway in the background. `router code` also starts
-the gateway automatically if it is not already running, then launches Claude Code
-through it.
+`emissary-router start` starts the local gateway in the background.
+`emissary-router code` also starts the gateway automatically if it is not already
+running, then launches Claude Code through it.
 
 Override config paths with flags:
 
 ```bash
-router start --config ./config.yaml --pricing ./pricing.yaml
-router code --config ./config.yaml --pricing ./pricing.yaml -- [claude args]
+emissary-router start --config ./config.yaml --pricing ./pricing.yaml
+emissary-router code --config ./config.yaml --pricing ./pricing.yaml -- [claude args]
 ```
 
 Or environment variables:
 
 ```bash
-export ROUTER_CONFIG=./config.yaml
-export ROUTER_PRICING=./pricing.yaml
+export EMISSARY_ROUTER_CONFIG=./config.yaml
+export EMISSARY_ROUTER_PRICING=./pricing.yaml
+```
+
+To keep config, pricing, logs, and pid files under a different parent directory:
+
+```bash
+export EMISSARY_ROUTER_HOME=/path/to/.emissary-router
 ```
 
 ## Config
@@ -71,12 +95,18 @@ export ROUTER_PRICING=./pricing.yaml
 The config is model-first: pick model names, then choose which provider serves each
 model.
 
-```yaml
-server:
-  host: 127.0.0.1
-  port: 8788
+Most users do not need to set `router.url`; it defaults to:
 
+```text
+https://api.withemissary.com/v1/classification
+```
+
+Example:
+
+```yaml
 router:
+  api_key: ${EMISSARY_ROUTER_API_KEY}
+  router_model: emissary-model-router-shared
   default: claude-sonnet-4.6
   enabled:
     - claude-sonnet-4.6
@@ -84,7 +114,7 @@ router:
     - gemini-3.1-flash-lite
   policy:
     name: cheap_first
-    tau: 0.85
+    tau: 0.8
     candidates:
       - gemini-3.1-flash-lite
       - claude-haiku-4.5
@@ -93,9 +123,6 @@ router:
 providers:
   anthropic:
     api_key: ${ANTHROPIC_API_KEY}
-
-  google:
-    api_key: ${GOOGLE_API_KEY}
 
   openrouter:
     api_key: ${OPENROUTER_API_KEY}
@@ -112,58 +139,65 @@ models:
   gemini-3.1-flash-lite:
     provider: openrouter
     model_id: google/gemini-3.1-flash-lite
-
-classifier:
-  url: https://classifier.example.com/v1/classification
-  api_key: ${ROUTER_KEY}
-  model: emissary-model-router-shared
 ```
 
-The model key, such as `gemini-3.1-flash-lite`, is the name the router classifier
-uses. Provider type is inferred for the built-in provider names `anthropic`, `google`,
-and `openrouter`.
+The model key, such as `gemini-3.1-flash-lite`, is the name returned by the
+Emissary router classifier. Provider type is inferred for the built-in provider
+names `anthropic`, `google`, and `openrouter`.
 
-`validate-config` reports unresolved env vars as warnings so example files can be
-checked without real secrets. `start` and `code` are strict and fail before provider
-calls if secrets are missing.
+`validate-config` reports unresolved environment variables as warnings so example
+files can be checked without real secrets. `start` and `code` are strict and fail
+before provider calls if secrets are missing.
 
 ## API Keys
 
-The simplest setup is to put keys directly in `~/.config/router/config.yaml`:
+The simplest setup is to put keys directly in `~/.emissary-router/config.yaml`:
 
 ```yaml
+router:
+  api_key: your-emissary-router-api-key
+  router_model: emissary-model-router-shared
+
 providers:
   anthropic:
     api_key: your-anthropic-api-key
 
-  google:
-    api_key: your-google-api-key
-
   openrouter:
     api_key: your-openrouter-api-key
-
-classifier:
-  url: https://classifier.example.com/v1/classification
-  api_key: your-router-classifier-key
-  model: emissary-model-router-shared
 ```
 
 You can also keep keys outside the file by using environment-variable placeholders:
 
 ```yaml
+router:
+  api_key: ${EMISSARY_ROUTER_API_KEY}
+
 providers:
   anthropic:
     api_key: ${ANTHROPIC_API_KEY}
 ```
 
-If a config value still contains `${...}`, `router start` and `router code` require
-that environment variable to be set. `router validate-config` only reports unresolved
-variables as warnings, so example files can still be checked before secrets are added.
+If a config value still contains `${...}`, `emissary-router start` and
+`emissary-router code` require that environment variable to be set.
+`emissary-router validate-config` only reports unresolved variables as warnings.
+
+## Advanced Router Settings
+
+Override the Emissary classification endpoint only for staging, development, or a
+private deployment:
+
+```yaml
+router:
+  url: https://staging-api.withemissary.com/v1/classification
+  api_key: ${EMISSARY_ROUTER_API_KEY}
+  router_model: emissary-model-router-shared
+  timeout_seconds: 30
+```
 
 ## Advanced Provider Settings
 
-Most users only need `api_key`. Advanced fields are available when you want to point a
-built-in provider at a proxy or gateway:
+Most users only need `api_key`. Advanced fields are available when you want to point
+a built-in provider at a proxy or gateway:
 
 ```yaml
 providers:
@@ -175,7 +209,8 @@ providers:
 `base_url` is only required when you intentionally want to override the default
 provider endpoint.
 
-If you use a custom provider name, add `type` so `router` knows which adapter to use:
+If you use a custom provider name, add `type` so Emissary Router knows which adapter
+to use:
 
 ```yaml
 providers:
@@ -209,8 +244,8 @@ prefixes remain cacheable. This is not a general cache control.
 
 ## Pricing
 
-Pricing is keyed by model name, not provider. Keep this file up to date when providers
-change prices.
+Pricing is keyed by model name. Keep this file up to date when providers change
+prices.
 
 ```yaml
 pricing:
@@ -232,16 +267,15 @@ Units are USD per 1M tokens.
 
 ## Running Claude Code
 
-After editing `~/.config/router/config.yaml`, run:
+After editing `~/.emissary-router/config.yaml`, run:
 
 ```bash
-router validate-config
-router start
-router code -- [claude args]
+emissary-router validate-config
+emissary-router code -- [claude args]
 ```
 
-`router code` launches Claude Code with the required local gateway environment,
-including:
+`emissary-router code` launches Claude Code with the required local gateway
+environment, including:
 
 ```text
 ANTHROPIC_BASE_URL=http://127.0.0.1:<port>
@@ -250,11 +284,19 @@ ENABLE_TOOL_SEARCH=true
 
 ## Debugging
 
-For normal use, run the gateway with `router start`. To keep the gateway in the
-foreground and see server logs directly:
+For normal use, run Claude Code with `emissary-router code`. To start the gateway
+without Claude Code:
 
 ```bash
-router debug
+emissary-router start
+emissary-router status
+emissary-router stop
+```
+
+To keep the gateway in the foreground and see server logs directly:
+
+```bash
+emissary-router debug
 ```
 
 ## Routing Policies
@@ -273,9 +315,9 @@ Implemented:
 - `google`: Google Gemini `generateContent`.
 - `openrouter`: OpenAI-compatible Chat Completions.
 
-For OpenRouter and Google, `router` calls the provider non-streaming and synthesizes
-Anthropic SSE when Claude Code requested streaming. This avoids fragile streaming
-tool-call translation.
+For OpenRouter and Google, Emissary Router calls the provider non-streaming and
+synthesizes Anthropic SSE when Claude Code requested streaming. This avoids fragile
+streaming tool-call translation.
 
 ### Google Native Gemini 3
 
@@ -296,7 +338,8 @@ not a safe general-purpose target for Claude Code tool loops in V1. Use one of:
 
 ## Thinking
 
-`router` preserves Claude Code thinking settings where each provider supports them:
+Emissary Router preserves Claude Code thinking settings where each provider supports
+them:
 
 - Anthropic: passes `thinking` through unchanged.
 - Google: maps Anthropic/OpenRouter-style effort or token budgets to Gemini 3
@@ -311,7 +354,7 @@ thinking, so `thinking.type: disabled` maps to the closest supported minimal set
 
 Users do not need to configure caching.
 
-`router` handles provider cache compatibility internally:
+Emissary Router handles provider cache compatibility internally:
 
 - Anthropic: passes Claude Code cache controls through and defensively removes dynamic
   Claude Code attribution text that can break prefix caching.
@@ -320,17 +363,17 @@ Users do not need to configure caching.
 - OpenRouter: enables automatic prompt caching for Claude models where supported, and
   records `prompt_tokens_details.cached_tokens` and `cache_write_tokens`.
 
-There is intentionally no single portable cache setting. The providers expose different
-cache mechanisms:
+There is intentionally no single portable cache setting. The providers expose
+different cache mechanisms:
 
-- Anthropic supports prompt caching through `cache_control`; Claude Code already sends
-  cache controls, so `router` preserves them.
+- Anthropic supports prompt caching through `cache_control`; Claude Code already
+  sends cache controls, so Emissary Router preserves them.
 - OpenRouter supports top-level automatic caching for Claude models and reports cache
   read/write metrics in the usage object. Other models may use provider-native
   implicit caching behind OpenRouter.
 - Google has Gemini implicit caching by default for stable prefixes. Gemini also has
-  explicit `CachedContent` resources, but `router` does not manage those in V1 because
-  they require create/update/delete lifecycle handling and storage billing.
+  explicit `CachedContent` resources, but Emissary Router does not manage those in V1
+  because they require create/update/delete lifecycle handling and storage billing.
 
 Telemetry rows include normalized token usage, cache read/write tokens, routing
 decision, provider, model id, and estimated cost.
@@ -338,12 +381,12 @@ decision, provider, model id, and estimated cost.
 Default telemetry file:
 
 ```text
-~/.local/state/router/events.jsonl
+~/.emissary-router/events.jsonl
 ```
 
 ## Server Settings
 
-By default, `router` listens on `127.0.0.1:8788`.
+By default, Emissary Router listens on `127.0.0.1:8788`.
 
 To change the local port:
 
@@ -358,8 +401,9 @@ If you intentionally expose the gateway outside loopback, set `server.auth_key`:
 server:
   host: 0.0.0.0
   port: 8788
-  auth_key: ${ROUTER_AUTH_KEY}
+  auth_key: ${EMISSARY_ROUTER_AUTH_KEY}
 ```
 
 Binding to `0.0.0.0` without `server.auth_key` fails validation. When `auth_key` is
-set, `router code` automatically passes that key to Claude Code for gateway auth.
+set, `emissary-router code` automatically passes that key to Claude Code for gateway
+auth.

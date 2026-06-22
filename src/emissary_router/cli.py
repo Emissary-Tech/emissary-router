@@ -8,15 +8,15 @@ from pathlib import Path
 
 import uvicorn
 
-from router.config import (
+from emissary_router.config import (
     load_config,
     load_pricing,
     unresolved_env_paths,
     user_config_path,
     user_pricing_path,
 )
-from router.launch import exec_claude, gateway_status, stop_gateway
-from router.launch import ensure_gateway
+from emissary_router.launch import exec_claude, gateway_status, stop_gateway
+from emissary_router.launch import ensure_gateway
 
 
 def _cmd_config_path(_: argparse.Namespace) -> int:
@@ -51,9 +51,9 @@ def _cmd_validate_config(args: argparse.Namespace) -> int:
 
 def _cmd_code(args: argparse.Namespace) -> int:
     if args.config:
-        os.environ["ROUTER_CONFIG"] = args.config
+        os.environ["EMISSARY_ROUTER_CONFIG"] = args.config
     if args.pricing:
-        os.environ["ROUTER_PRICING"] = args.pricing
+        os.environ["EMISSARY_ROUTER_PRICING"] = args.pricing
     config_path = (Path(args.config) if args.config else user_config_path()).expanduser().resolve()
     pricing_path = (Path(args.pricing) if args.pricing else user_pricing_path()).expanduser().resolve()
     config = load_config(config_path)
@@ -73,12 +73,12 @@ def _cmd_code(args: argparse.Namespace) -> int:
 
 def _cmd_debug(args: argparse.Namespace) -> int:
     if args.config:
-        os.environ["ROUTER_CONFIG"] = args.config
+        os.environ["EMISSARY_ROUTER_CONFIG"] = args.config
     if args.pricing:
-        os.environ["ROUTER_PRICING"] = args.pricing
+        os.environ["EMISSARY_ROUTER_PRICING"] = args.pricing
     config = load_config(Path(args.config) if args.config else None)
     uvicorn.run(
-        "router.server:create_app",
+        "emissary_router.server:create_app",
         host=config.server.host,
         port=config.server.port,
         factory=True,
@@ -88,9 +88,9 @@ def _cmd_debug(args: argparse.Namespace) -> int:
 
 def _cmd_start(args: argparse.Namespace) -> int:
     if args.config:
-        os.environ["ROUTER_CONFIG"] = args.config
+        os.environ["EMISSARY_ROUTER_CONFIG"] = args.config
     if args.pricing:
-        os.environ["ROUTER_PRICING"] = args.pricing
+        os.environ["EMISSARY_ROUTER_PRICING"] = args.pricing
     config_path = (Path(args.config) if args.config else user_config_path()).expanduser().resolve()
     pricing_path = (Path(args.pricing) if args.pricing else user_pricing_path()).expanduser().resolve()
     config = load_config(config_path)
@@ -110,7 +110,7 @@ def _cmd_restart(args: argparse.Namespace) -> int:
 
 def _cmd_status(args: argparse.Namespace) -> int:
     if args.config:
-        os.environ["ROUTER_CONFIG"] = args.config
+        os.environ["EMISSARY_ROUTER_CONFIG"] = args.config
     config = load_config(Path(args.config) if args.config else None, strict_env=False)
     status = gateway_status(config)
     print(json.dumps(status.__dict__, indent=2))
@@ -124,7 +124,7 @@ def _cmd_stop(_: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="router")
+    parser = argparse.ArgumentParser(prog="emissary-router")
     sub = parser.add_subparsers(dest="command", required=True)
 
     config_path = sub.add_parser("config-path", help="Print the default config path")
@@ -150,7 +150,7 @@ def build_parser() -> argparse.ArgumentParser:
     debug.add_argument("--pricing", default=None)
     debug.set_defaults(func=_cmd_debug)
 
-    code = sub.add_parser("code", help="Launch Claude Code through router")
+    code = sub.add_parser("code", help="Launch Claude Code through Emissary Router")
     code.add_argument("--config", default=None)
     code.add_argument("--pricing", default=None)
     code.add_argument("--claude-command", default=os.environ.get("CLAUDE_COMMAND", "claude"))
@@ -158,7 +158,7 @@ def build_parser() -> argparse.ArgumentParser:
     code.add_argument("claude_args", nargs=argparse.REMAINDER)
     code.set_defaults(func=_cmd_code)
 
-    status = sub.add_parser("status", help="Show router gateway status")
+    status = sub.add_parser("status", help="Show Emissary Router gateway status")
     status.add_argument("--config", default=None)
     status.set_defaults(func=_cmd_status)
 

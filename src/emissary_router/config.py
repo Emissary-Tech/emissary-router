@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, model_validator
 ENV_RE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
 UNRESOLVED_ENV_RE = re.compile(r"\$\{?[A-Za-z_][A-Za-z0-9_]*\}?")
 ProviderType = Literal["anthropic", "openrouter", "google"]
+DEFAULT_CLASSIFICATION_URL = "https://api.withemissary.com/v1/classification"
 PROVIDER_TYPES_BY_NAME: dict[str, ProviderType] = {
     "anthropic": "anthropic",
     "openrouter": "openrouter",
@@ -31,12 +32,22 @@ def infer_provider_type(name: str, config: "ProviderConfig") -> ProviderType:
     )
 
 
-def user_config_path() -> Path:
-    return Path(os.environ.get("ROUTER_CONFIG", "~/.config/router/config.yaml")).expanduser()
+def emissary_router_home() -> Path:
+    return Path(os.environ.get("EMISSARY_ROUTER_HOME", "~/.emissary-router")).expanduser()
 
 
 def user_pricing_path() -> Path:
-    return Path(os.environ.get("ROUTER_PRICING", "~/.config/router/pricing.yaml")).expanduser()
+    configured = os.environ.get("EMISSARY_ROUTER_PRICING")
+    if configured:
+        return Path(configured).expanduser()
+    return emissary_router_home() / "pricing.yaml"
+
+
+def user_config_path() -> Path:
+    configured = os.environ.get("EMISSARY_ROUTER_CONFIG")
+    if configured:
+        return Path(configured).expanduser()
+    return emissary_router_home() / "config.yaml"
 
 
 def _interpolate_env(value: Any) -> Any:
@@ -151,21 +162,18 @@ class PolicyConfig(BaseModel):
 
 
 class RouterConfig(BaseModel):
+    url: str = DEFAULT_CLASSIFICATION_URL
+    api_key: str | None = None
+    router_model: str = "emissary-model-router-shared"
+    timeout_seconds: float = 30
     default: str
     enabled: list[str]
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
 
 
-class ClassifierConfig(BaseModel):
-    url: str
-    api_key: str | None = None
-    model: str
-    timeout_seconds: float = 30
-
-
 class TelemetryConfig(BaseModel):
     enabled: bool = True
-    log_path: str = "~/.local/state/router/events.jsonl"
+    log_path: str = "~/.emissary-router/events.jsonl"
     include_classifier_input: bool = False
 
 
@@ -174,7 +182,6 @@ class AppConfig(BaseModel):
     router: RouterConfig
     providers: dict[str, ProviderConfig]
     models: dict[str, ModelConfig]
-    classifier: ClassifierConfig
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
 
     @model_validator(mode="after")

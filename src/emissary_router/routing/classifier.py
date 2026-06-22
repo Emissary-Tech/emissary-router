@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import httpx
 
-from router.config import ClassifierConfig
+from emissary_router.config import RouterConfig
 
 
 class ClassifierClient:
-    def __init__(self, config: ClassifierConfig):
+    def __init__(self, config: RouterConfig):
         self._config = config
 
     async def predict(self, classifier_input: str) -> dict[str, float]:
@@ -14,7 +14,7 @@ class ClassifierClient:
         if self._config.api_key:
             headers["X-API-Key"] = self._config.api_key
         payload = {
-            "model": self._config.model,
+            "model": self._config.router_model,
             "input": classifier_input,
             "data_format": "probs",
         }

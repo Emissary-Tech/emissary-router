@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from router.config import ProviderConfig
-from router.providers.openrouter import OpenRouterProvider
+from emissary_router.config import ProviderConfig
+from emissary_router.providers.openrouter import OpenRouterProvider
 
 
 def test_openrouter_request_maps_tools_reasoning_and_cache_control() -> None:

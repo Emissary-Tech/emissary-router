@@ -1,8 +1,6 @@
-server:
-  host: 127.0.0.1
-  port: 8788
-
 router:
+  api_key: ${EMISSARY_ROUTER_API_KEY}
+  router_model: emissary-model-router-shared
   default: claude-sonnet-4.6
   enabled:
     - claude-sonnet-4.6
@@ -37,13 +35,7 @@ models:
     provider: openrouter
     model_id: google/gemini-3.1-flash-lite
 
-classifier:
-  url: https://api.withemissary.com/v1/classification
-  api_key: ${ROUTER_KEY}
-  model: emissary-model-router-shared
-  timeout_seconds: 30
-
 telemetry:
   enabled: true
-  log_path: ~/.local/state/router/events.jsonl
+  log_path: ~/.emissary-router/events.jsonl
   include_classifier_input: false

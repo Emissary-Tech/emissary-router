@@ -4,7 +4,7 @@ import json
 import re
 from typing import Any
 
-from router.routing.classifier_input import render_classifier_input
+from emissary_router.routing.classifier_input import render_classifier_input
 
 
 REMINDER_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)

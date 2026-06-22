@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from router.config import AppConfig
-from router.schemas import RouteDecision
+from emissary_router.config import AppConfig
+from emissary_router.schemas import RouteDecision
 
 
 def choose_model(config: AppConfig, probabilities: dict[str, float]) -> RouteDecision:
