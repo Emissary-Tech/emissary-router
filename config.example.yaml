@@ -37,5 +37,9 @@ models:
 
 telemetry:
   enabled: true
-  log_path: ~/.emissary-router/events.jsonl
+  db_path: ~/.emissary-router/events.sqlite3
   include_classifier_input: false
+  # include_raw_event: false   # store a compact debug blob per call (off by default)
+  retention_days: 30           # delete events older than this (null = keep all)
+  max_events: 50000            # cap total events, oldest dropped first (null = no cap)
+  baseline_model: claude-sonnet-4.6   # "what if everything went here" for savings

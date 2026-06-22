@@ -47,7 +47,7 @@ PORT="${ROUTER_TEST_PORT:-8799}"
 WORK="$(mktemp -d)"
 export EMISSARY_ROUTER_HOME="$WORK/home"
 mkdir -p "$EMISSARY_ROUTER_HOME"
-TELOG="$EMISSARY_ROUTER_HOME/events.jsonl"
+TELDB="$EMISSARY_ROUTER_HOME/events.sqlite3"
 CFG="$WORK/config.yaml"
 PRICING="$ROOT/pricing.example.yaml"
 cleanup() { emissary-router stop >/dev/null 2>&1 || true; rm -rf "$WORK"; }
@@ -93,7 +93,7 @@ models:
     model_id: google/gemini-3.1-flash-lite
 telemetry:
   enabled: true
-  log_path: $TELOG
+  db_path: $TELDB
 YAML
 
 # --- 3. CLI lifecycle ---------------------------------------------------------
@@ -106,9 +106,9 @@ emissary-router status --config "$CFG" | grep -q '"healthy": true' \
 echo "  PASS gateway healthy on :$PORT"
 
 # --- 4. gateway + per-bridge checks (live) ------------------------------------
-python3 - "$PORT" "$TELOG" <<'PY'
-import sys, os, json, asyncio, urllib.request
-PORT, TELOG = sys.argv[1], sys.argv[2]
+python3 - "$PORT" "$TELDB" <<'PY'
+import sys, os, json, sqlite3, asyncio, urllib.request
+PORT, TELDB = sys.argv[1], sys.argv[2]
 from emissary_router.config import ProviderConfig, ResolvedModel
 from emissary_router.schemas import AnthropicRequest, RequestContext
 from emissary_router.providers.anthropic import AnthropicProvider
@@ -132,18 +132,41 @@ def gw(task):
             "messages": [{"role": "user", "content": task}], "stream": False}
     req = urllib.request.Request(f"http://127.0.0.1:{PORT}/v1/messages",
                                  data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json", "anthropic-version": "2023-06-01"})
+                                 headers={"Content-Type": "application/json", "anthropic-version": "2023-06-01",
+                                          "X-Claude-Code-Session-Id": "itest-session-1"})
     return json.loads(urllib.request.urlopen(req, timeout=120).read())
+
+def get(path):
+    return json.loads(urllib.request.urlopen(f"http://127.0.0.1:{PORT}{path}", timeout=30).read())
 
 r = gw("Write a python function to compute fibonacci.")
 check("gateway request returns content", bool(r.get("content")), f"model={r.get('model')}")
-rows = [json.loads(l) for l in open(TELOG)] if os.path.exists(TELOG) else []
-check("telemetry row written", len(rows) >= 1, f"{len(rows)} row(s)")
+rows = []
+if os.path.exists(TELDB):
+    conn = sqlite3.connect(TELDB); conn.row_factory = sqlite3.Row
+    rows = [dict(x) for x in conn.execute("SELECT * FROM events ORDER BY ts").fetchall()]
+    conn.close()
+check("telemetry row written to sqlite", len(rows) >= 1, f"{len(rows)} row(s)")
 if rows:
     last = rows[-1]
     check("telemetry has served_model + route_reason + cost_usd",
           bool(last.get("served_model")) and bool(last.get("route_reason")) and ("cost_usd" in last),
           f"served={last.get('served_model')} reason={last.get('route_reason')}")
+    check("telemetry has session_id + turn_id + call_kind",
+          last.get("session_id") == "itest-session-1" and last.get("turn_id") is not None
+          and last.get("call_kind") in ("main", "background"),
+          f"session={last.get('session_id')} turn={last.get('turn_id')} kind={last.get('call_kind')}")
+
+# ---- dashboard API smoke ----
+print("[dashboard] api endpoints")
+summary = get("/api/summary")
+check("dashboard /api/summary", "total_cost_usd" in summary and "by_model" in summary,
+      f"events={summary.get('total_events')} saved={summary.get('savings_usd')}")
+events = get("/api/events?limit=10")
+check("dashboard /api/events", isinstance(events.get("events"), list) and len(events["events"]) >= 1)
+turns = get("/api/turns")
+check("dashboard /api/turns groups by input", isinstance(turns.get("turns"), list) and len(turns["turns"]) >= 1,
+      f"turns={len(turns.get('turns', []))}")
 
 # ---- direct bridge checks ----
 ant = AnthropicProvider(ProviderConfig(type="anthropic", api_key=os.environ["ANTHROPIC_API_KEY"]))

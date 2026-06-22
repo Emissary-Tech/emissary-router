@@ -173,8 +173,12 @@ class RouterConfig(BaseModel):
 
 class TelemetryConfig(BaseModel):
     enabled: bool = True
-    log_path: str = "~/.emissary-router/events.jsonl"
+    db_path: str = "~/.emissary-router/events.sqlite3"
     include_classifier_input: bool = False
+    include_raw_event: bool = False
+    retention_days: int | None = 30
+    max_events: int | None = 50000
+    baseline_model: str = "claude-sonnet-4.6"
 
 
 class AppConfig(BaseModel):

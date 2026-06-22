@@ -28,7 +28,7 @@ The installer performs an editable install and creates default files in one plac
 ~/.emissary-router/
   config.yaml
   pricing.yaml
-  events.jsonl
+  events.sqlite3
   server.log
   server.pid
 ```
@@ -403,12 +403,66 @@ different cache mechanisms:
   because they require create/update/delete lifecycle handling and storage billing.
 
 Telemetry rows include normalized token usage, cache read/write tokens, routing
-decision, provider, model id, and estimated cost.
+decision, provider, model id, session/turn grouping, and estimated cost. Rows are
+stored in a local SQLite database (lean columns only — no request/response bodies or
+prompt text unless you explicitly opt in). Old rows are pruned by `retention_days` and
+`max_events`.
 
-Default telemetry file:
+Default telemetry database:
 
 ```text
-~/.emissary-router/events.jsonl
+~/.emissary-router/events.sqlite3
+```
+
+## Dashboard
+
+A local dashboard reads the telemetry database and shows where requests went and how
+much routing saved versus sending everything to one model.
+
+There is no separate command to launch it. `emissary-router start` and
+`emissary-router code` print the dashboard URL, and open it in your browser the first
+time the gateway starts (a cold start). Repeated runs that reuse an already-running
+gateway just print the URL, so you don't get a new browser tab every time.
+
+```text
+Dashboard: http://127.0.0.1:8788/dashboard
+```
+
+To get back in after closing the tab, just visit that URL again. If you lost it,
+`emissary-router status` prints it too. Pass `--no-open` to `start`/`code` to suppress
+the automatic browser launch. The dashboard has three tabs:
+
+- **Savings**: total spend, the all-`baseline_model` estimate, estimated savings, and
+  per-model call distribution.
+- **Requests**: every routed call (served model, provider, cost, cache hit, tokens),
+  with per-row delete.
+- **Per-input**: calls grouped by one user input (a turn) — how many main and
+  background calls went to which models — with per-session delete.
+
+### Storage
+
+The dashboard is backed by the local SQLite database at
+`~/.emissary-router/events.sqlite3` (the same telemetry store the gateway writes to).
+Because it is a file, records persist across restarts — history is available the next
+time you start the gateway. The store keeps only lean, queryable columns (no request or
+response bodies, and no prompt text unless you opt in via `include_classifier_input` /
+`include_raw_event`). Old rows are pruned by `retention_days` and `max_events`, so the
+file stays bounded. Savings is an estimate: it applies the baseline model's prices to
+each call's actual token counts.
+
+### Dashboard auth
+
+When `server.auth_key` is set, the dashboard, its JSON API, and the delete endpoints all
+require that key (it is not enough to protect only `/v1/messages`). `emissary-router
+dashboard` opens the URL with the key attached (`/dashboard?key=...`), and the page sends
+it on every request.
+
+For a remote gateway (`host: 0.0.0.0`), note that this puts the key in the URL. Prefer
+keeping the gateway on loopback and reaching the dashboard through an SSH tunnel, e.g.:
+
+```bash
+ssh -N -L 8788:127.0.0.1:8788 user@remote-host
+# then open http://127.0.0.1:8788/dashboard locally
 ```
 
 ## Server Settings
@@ -433,4 +487,4 @@ server:
 
 Binding to `0.0.0.0` without `server.auth_key` fails validation. When `auth_key` is
 set, `emissary-router code` automatically passes that key to Claude Code for gateway
-auth.
+auth, and the dashboard requires it too (see "Dashboard auth" above).
