@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict
-import os
-from pathlib import Path
+import json
 import time
 import uuid
 
@@ -16,23 +14,34 @@ from emissary_router.providers.registry import build_provider
 from emissary_router.routing.classifier import ClassifierClient
 from emissary_router.routing.policy import choose_model
 from emissary_router.routing.request_to_classifier_input import request_to_classifier_input
-from emissary_router.telemetry import JsonlTelemetry
+from emissary_router.telemetry import (
+    EventRecord,
+    SqliteStore,
+    TurnTracker,
+    call_kind_from_body,
+    latest_real_user_text,
+    usage_tokens,
+)
+
+SESSION_HEADER = "x-claude-code-session-id"
 
 
 class RouterPipeline:
-    def __init__(self, config: AppConfig):
+    def __init__(
+        self,
+        config: AppConfig,
+        pricing: PricingConfig,
+        store: SqliteStore | None = None,
+        turns: TurnTracker | None = None,
+    ):
         self._config = config
         self._classifier = ClassifierClient(config.router)
-        self._providers = self._build_providers()
-        self._telemetry = (
-            JsonlTelemetry(
-                Path(config.telemetry.log_path).expanduser(),
-                retention_days=config.telemetry.retention_days,
-                max_events=config.telemetry.max_events,
-            )
-            if config.telemetry.enabled
-            else None
-        )
+        self._providers = {
+            name: build_provider(name, provider_config)
+            for name, provider_config in config.providers.items()
+        }
+        self._store = store
+        self._turns = turns or TurnTracker(store)
 
     def _build_providers(self):
         provider_names = {
@@ -70,37 +79,41 @@ class RouterPipeline:
         decision = choose_model(self._config, probabilities)
         model = self._config.resolve_model(decision.model_name)
         provider = self._providers[model.provider]
+
+        session_id = _header(headers, SESSION_HEADER)
+        call_kind = call_kind_from_body(body)
+        turn_id = self._turns.turn_id(
+            session_id, latest_real_user_text(body.get("messages")), call_kind
+        )
+
         context = RequestContext(
             request_id=request_id,
-            conversation_id=None,
+            conversation_id=session_id,
             classifier_input=classifier_input,
             requested_model=body.get("model"),
         )
 
         def on_complete(usage: Usage, provider_metadata: dict) -> None:
-            self._write_telemetry(
-                {
-                    "ts": time.time(),
-                    "duration_ms": round((time.time() - started_at) * 1000, 3),
-                    "request_id": request_id,
-                    "requested_model": body.get("model"),
-                    "served_model": decision.model_name,
-                    "provider": model.provider,
-                    "model_id": model.model_id,
-                    "pricing_model": decision.model_name,
-                    "route_reason": decision.reason,
-                    "probabilities": decision.probabilities,
-                    "classifier_input": classifier_input_metadata,
-                    "usage": asdict(usage),
-                    "cost_usd": self._cost_usd(decision.model_name, usage),
-                    "cache": {
-                        "cache_read_input_tokens": usage.cache_read_input_tokens,
-                        "cache_creation_input_tokens": usage.cache_creation_input_tokens,
-                        "cache_hit": usage.cache_read_input_tokens > 0,
-                    },
-                    "provider_metadata": provider_metadata,
-                }
+            tokens = usage_tokens(usage)
+            record = EventRecord(
+                id=request_id,
+                ts=time.time(),
+                session_id=session_id,
+                turn_id=turn_id,
+                call_kind=call_kind,
+                requested_model=body.get("model"),
+                served_model=decision.model_name,
+                provider=model.provider,
+                model_id=model.model_id,
+                route_reason=decision.reason,
+                cost_usd=self._cost_usd(decision.model_name, usage),
+                duration_ms=round((time.time() - started_at) * 1000, 3),
+                raw_event=self._raw_event(
+                    decision, classifier_input, classifier_input_metadata, provider_metadata
+                ),
+                **tokens,
             )
+            self._write(record)
 
         return await provider.messages(
             AnthropicRequest(body=body, headers=headers),
@@ -108,6 +121,29 @@ class RouterPipeline:
             context=context,
             on_complete=on_complete,
         )
+
+    def _raw_event(
+        self,
+        decision,
+        classifier_input: str,
+        classifier_input_metadata: dict,
+        provider_metadata: dict,
+    ) -> str | None:
+        if not self._config.telemetry.include_raw_event:
+            return None
+        payload = {
+            "probabilities": decision.probabilities,
+            "classifier_input": {
+                **classifier_input_metadata,
+                **(
+                    {"text": classifier_input}
+                    if self._config.telemetry.include_classifier_input
+                    else {}
+                ),
+            },
+            "provider_metadata": provider_metadata,
+        }
+        return json.dumps(payload, ensure_ascii=False)
 
     def _missing_probability_labels(self, probabilities: dict[str, float]) -> list[str]:
         expected = set(self._config.enabled_models())
@@ -117,13 +153,20 @@ class RouterPipeline:
     def _cost_usd(self, model_name: str, usage: Usage) -> float | None:
         return _cost_usd(CATALOG[model_name].pricing, usage)
 
-    def _write_telemetry(self, row: dict) -> None:
-        if self._telemetry is None:
+    def _write(self, record: EventRecord) -> None:
+        if self._store is None:
             return
         try:
-            self._telemetry.write(row)
-        except OSError:
+            self._store.write(record)
+        except Exception:
             return
+
+
+def _header(headers: dict[str, str], name: str) -> str | None:
+    for key, value in headers.items():
+        if key.lower() == name:
+            return value
+    return None
 
 
 def _cost_usd(price: TokenPricing, usage: Usage) -> float:

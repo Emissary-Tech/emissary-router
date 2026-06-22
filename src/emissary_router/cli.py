@@ -20,7 +20,14 @@ from emissary_router.config import (
     user_env_path,
     write_env_file,
 )
-from emissary_router.launch import exec_claude, ensure_gateway, gateway_status, stop_gateway
+from emissary_router.launch import (
+    announce_dashboard,
+    dashboard_url,
+    ensure_gateway,
+    exec_claude,
+    gateway_status,
+    stop_gateway,
+)
 
 
 def _cmd_config_path(_: argparse.Namespace) -> int:
@@ -151,6 +158,7 @@ def _cmd_code(args: argparse.Namespace) -> int:
         claude_command=args.claude_command,
         claude_args=claude_args,
         dry_run=args.dry_run,
+        open_dashboard=not args.no_open,
     )
 
 
@@ -174,6 +182,7 @@ def _cmd_start(args: argparse.Namespace) -> int:
         return 1
     status = ensure_gateway(config, config_path)
     print(json.dumps(status.__dict__, indent=2))
+    announce_dashboard(config, status, open_browser=not args.no_open)
     return 0 if status.healthy else 1
 
 
@@ -190,6 +199,9 @@ def _cmd_status(args: argparse.Namespace) -> int:
     config = load_config(Path(args.config) if args.config else None, strict_env=False)
     status = gateway_status(config)
     print(json.dumps(status.__dict__, indent=2))
+    url = dashboard_url(config)
+    if url:
+        print(f"Dashboard: {url}")
     return 0 if status.healthy else 1
 
 
@@ -225,6 +237,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     start = sub.add_parser("start", help="Start the local gateway in the background")
     start.add_argument("--config", default=None)
+    start.add_argument("--pricing", default=None)
+    start.add_argument("--no-open", action="store_true", help="Do not open the dashboard in a browser")
     start.set_defaults(func=_cmd_start)
 
     restart = sub.add_parser("restart", help="Restart the background gateway")
@@ -239,6 +253,7 @@ def build_parser() -> argparse.ArgumentParser:
     code.add_argument("--config", default=None)
     code.add_argument("--claude-command", default=os.environ.get("CLAUDE_COMMAND", "claude"))
     code.add_argument("--dry-run", action="store_true", help="Print launch command and env without exec")
+    code.add_argument("--no-open", action="store_true", help="Do not open the dashboard in a browser")
     code.add_argument("claude_args", nargs=argparse.REMAINDER)
     code.set_defaults(func=_cmd_code)
 
