@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end integration test for `router`.
+# End-to-end integration test for emissary-router.
 #
 # Verifies the real Claude Code path against live provider APIs:
 #   install/CLI lifecycle -> gateway routing + telemetry (real classifier)
@@ -8,8 +8,8 @@
 # Keys: copy scripts/test_env.sh.example -> scripts/test_env.sh and fill in real
 # keys (gitignored; this script sources it automatically). Then just run:
 #   bash scripts/integration_test.sh
-# (Or just export ANTHROPIC_API_KEY / GOOGLE_API_KEY / OPENROUTER_API_KEY /
-#  ROUTER_KEY yourself instead of creating test_env.sh.)
+# (Or export ANTHROPIC_API_KEY / GOOGLE_API_KEY / OPENROUTER_API_KEY / ROUTER_KEY
+#  yourself instead of creating test_env.sh.)
 #
 # Optional overrides:
 #   ROUTER_CLASSIFIER_URL   (default https://api.withemissary.com/v1/classification)
@@ -35,7 +35,7 @@ for v in ANTHROPIC_API_KEY GOOGLE_API_KEY OPENROUTER_API_KEY ROUTER_KEY; do
 done
 if [ "${#missing[@]}" -gt 0 ]; then
   echo "missing required env: ${missing[*]}" >&2
-  echo "hint: set -a; source ../.env; set +a; export ROUTER_KEY=<classifier key>" >&2
+  echo "hint: create scripts/test_env.sh (see test_env.sh.example) or export the keys" >&2
   exit 2
 fi
 
@@ -43,19 +43,19 @@ CLASS_URL="${ROUTER_CLASSIFIER_URL:-https://api.withemissary.com/v1/classificati
 CLASS_MODEL="${ROUTER_CLASSIFIER_MODEL:-emissary-model-router-shared}"
 PORT="${ROUTER_TEST_PORT:-8799}"
 
-# --- isolated state + cleanup -------------------------------------------------
+# --- isolated home (config/pricing/logs/pid/telemetry) + cleanup --------------
 WORK="$(mktemp -d)"
-export ROUTER_STATE_DIR="$WORK/state"
-mkdir -p "$ROUTER_STATE_DIR"
-TELOG="$ROUTER_STATE_DIR/events.jsonl"
+export EMISSARY_ROUTER_HOME="$WORK/home"
+mkdir -p "$EMISSARY_ROUTER_HOME"
+TELOG="$EMISSARY_ROUTER_HOME/events.jsonl"
 CFG="$WORK/config.yaml"
 PRICING="$ROOT/pricing.example.yaml"
-cleanup() { router stop >/dev/null 2>&1 || true; rm -rf "$WORK"; }
+cleanup() { emissary-router stop >/dev/null 2>&1 || true; rm -rf "$WORK"; }
 trap cleanup EXIT
 
 # --- 1. install (editable) if the CLI is not already available ----------------
-if ! command -v router >/dev/null 2>&1; then
-  echo "[setup] installing router (editable)..."
+if ! command -v emissary-router >/dev/null 2>&1; then
+  echo "[setup] installing emissary-router (editable)..."
   python3 -m pip install -e . -q
 fi
 
@@ -65,11 +65,14 @@ server:
   host: 127.0.0.1
   port: $PORT
 router:
+  url: $CLASS_URL
+  api_key: \${ROUTER_KEY}
+  router_model: $CLASS_MODEL
   default: claude-sonnet-4.6
   enabled: [claude-sonnet-4.6, claude-haiku-4.5, gemini-3.1-flash-lite]
   policy:
     name: cheap_first
-    tau: 0.85
+    tau: 0.8
     candidates: [gemini-3.1-flash-lite, claude-haiku-4.5, claude-sonnet-4.6]
 providers:
   anthropic:
@@ -88,10 +91,6 @@ models:
   gemini-3.1-flash-lite:
     provider: openrouter
     model_id: google/gemini-3.1-flash-lite
-classifier:
-  url: $CLASS_URL
-  api_key: \${ROUTER_KEY}
-  model: $CLASS_MODEL
 telemetry:
   enabled: true
   log_path: $TELOG
@@ -99,10 +98,10 @@ YAML
 
 # --- 3. CLI lifecycle ---------------------------------------------------------
 echo "[lifecycle] validate-config"
-router validate-config --config "$CFG" --pricing "$PRICING" >/dev/null
+emissary-router validate-config --config "$CFG" --pricing "$PRICING" >/dev/null
 echo "[lifecycle] start (background)"
-router start --config "$CFG" --pricing "$PRICING" >/dev/null
-router status --config "$CFG" | grep -q '"healthy": true' \
+emissary-router start --config "$CFG" --pricing "$PRICING" >/dev/null
+emissary-router status --config "$CFG" | grep -q '"healthy": true' \
   || { echo "  FAIL gateway did not become healthy"; exit 1; }
 echo "  PASS gateway healthy on :$PORT"
 
@@ -110,10 +109,10 @@ echo "  PASS gateway healthy on :$PORT"
 python3 - "$PORT" "$TELOG" <<'PY'
 import sys, os, json, asyncio, urllib.request
 PORT, TELOG = sys.argv[1], sys.argv[2]
-from router.config import ProviderConfig, ResolvedModel
-from router.ir import AnthropicRequest, RequestContext
-from router.providers.anthropic import AnthropicProvider
-from router.providers.openrouter import OpenRouterProvider
+from emissary_router.config import ProviderConfig, ResolvedModel
+from emissary_router.schemas import AnthropicRequest, RequestContext
+from emissary_router.providers.anthropic import AnthropicProvider
+from emissary_router.providers.openrouter import OpenRouterProvider
 
 fails = []
 def check(name, ok, detail=""):
@@ -156,7 +155,7 @@ async def call(prov, mid, body):
     resp = await prov.messages(
         AnthropicRequest(body=body, headers={"anthropic-version": "2023-06-01"}),
         model=rm(mid),
-        context=RequestContext(request_id="t", conversation_id="c", router_view="", requested_model=mid),
+        context=RequestContext(request_id="t", conversation_id="c", classifier_input="", requested_model=mid),
         on_complete=lambda u, m: cap.update(u=u, m=m))
     return resp, cap
 

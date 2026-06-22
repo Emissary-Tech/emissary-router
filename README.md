@@ -69,6 +69,22 @@ emissary-router code -- [claude args]
 `emissary-router start` starts the local gateway in the background.
 `emissary-router code` also starts the gateway automatically if it is not already
 running, then launches Claude Code through it.
+The gateway stays running after Claude Code exits so later sessions can reuse it.
+Stop it explicitly when you are done:
+
+```bash
+emissary-router stop
+```
+
+For normal Claude Code usage, you usually do not need to run `emissary-router start`
+first. This is enough:
+
+```bash
+emissary-router code -- [claude args]
+```
+
+Use `start`, `status`, `restart`, and `stop` when you want to manage the local
+gateway process manually.
 
 Override config paths with flags:
 
@@ -275,7 +291,10 @@ emissary-router code -- [claude args]
 ```
 
 `emissary-router code` launches Claude Code with the required local gateway
-environment, including:
+environment. If the local gateway is not already running, this command starts it in
+the background first, then execs Claude Code. The gateway is not stopped
+automatically when Claude Code exits; use `emissary-router stop` when you want to
+shut it down. The injected environment includes:
 
 ```text
 ANTHROPIC_BASE_URL=http://127.0.0.1:<port>

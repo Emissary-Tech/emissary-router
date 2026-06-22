@@ -5,3 +5,8 @@
 .vscode/
 # local test secrets
 scripts/test_env.sh
+
+# python test cache
+.pytest_cache/
+__pycache__/
+*.egg-info/
