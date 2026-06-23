@@ -7,11 +7,15 @@ cost/cache telemetry.
 ## Install
 
 ```bash
-uv tool install emissary-router      # or: pipx install emissary-router
+pip install emissary-router
 ```
 
-(Plain `pip install emissary-router` also works. Before the package is published you
-can install from git: `uv tool install "git+<repo-url>"`.)
+With uv: `uv pip install emissary-router`. Before the package is published, install
+from git: `pip install "git+<repo-url>"`.
+
+This installs the `er` command. If a global install is blocked (an
+"externally-managed environment"), install inside a virtualenv — or use an isolated
+installer like `pipx install emissary-router`.
 
 Then set up config and API keys:
 

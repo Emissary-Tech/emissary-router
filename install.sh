@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Dev / from-source install. For a normal install use pip/uv/pipx instead:
-#   uv tool install emissary-router      (or: pipx install emissary-router)
+# Dev / from-source install. For a normal install just:
+#   pip install emissary-router      (or: uv pip install emissary-router)
 # Config and keys are created by `er init`, not copied here, so the same flow
 # works whether installed from a clone or from a wheel.
 
