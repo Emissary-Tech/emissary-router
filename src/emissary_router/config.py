@@ -8,7 +8,13 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from emissary_router.catalog import CATALOG, PROVIDER_ENV, ROUTER_API_KEY_ENV, ProviderName
+from emissary_router.catalog import (
+    CATALOG,
+    PROVIDER_ENV,
+    ROUTER_API_KEY_ENV,
+    ProviderName,
+    cost_score,
+)
 
 DEFAULT_CLASSIFICATION_URL = "https://api.withemissary.com/v1/classification"
 
@@ -238,7 +244,10 @@ class AppConfig(BaseModel):
         return self
 
     def enabled_models(self) -> list[str]:
-        return [name for name in CATALOG if name in self.models and self.models[name].enabled]
+        # Ordered cheap -> expensive by price, derived from the catalog (not dict order),
+        # which is the order the routing policy scans.
+        names = [name for name in CATALOG if name in self.models and self.models[name].enabled]
+        return sorted(names, key=lambda name: cost_score(CATALOG[name]))
 
     def resolve_model(self, name: str) -> ResolvedModel:
         spec = CATALOG[name]
