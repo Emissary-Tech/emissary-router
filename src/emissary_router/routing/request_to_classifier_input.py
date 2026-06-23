@@ -8,6 +8,10 @@ from emissary_router.routing.classifier_input import render_classifier_input
 
 
 REMINDER_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)
+# Some clients wrap the actual request in a <session> envelope. The classifier was
+# trained on bare tasks, so strip the wrapper tags (keeping the inner request) to
+# avoid train/serve skew.
+SESSION_TAG_RE = re.compile(r"</?session\b[^>]*>", re.IGNORECASE)
 
 
 def _stringify(content: Any) -> str:
@@ -30,7 +34,9 @@ def _clean_user_text(blocks: list[dict[str, Any]]) -> str:
         for block in blocks
         if isinstance(block, dict) and block.get("type") == "text"
     ]
-    return REMINDER_RE.sub("", "\n".join(parts)).strip()
+    text = REMINDER_RE.sub("", "\n".join(parts))
+    text = SESSION_TAG_RE.sub("", text)
+    return text.strip()
 
 
 def request_to_classifier_input(body: dict[str, Any]) -> tuple[str, dict[str, Any]]:

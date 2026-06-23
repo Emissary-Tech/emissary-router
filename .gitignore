@@ -3,6 +3,10 @@
 **/__pycache__/
 **/venv
 .vscode/
+.env
+*.env
+!.env.example
+
 # local test secrets
 scripts/test_env.sh
 
@@ -10,3 +14,7 @@ scripts/test_env.sh
 .pytest_cache/
 __pycache__/
 *.egg-info/
+
+# build artifacts
+dist/
+build/

@@ -50,7 +50,7 @@ def gateway_status(config: AppConfig) -> GatewayStatus:
     return GatewayStatus(False, url, pid, "stopped")
 
 
-def ensure_gateway(config: AppConfig, config_path: Path, pricing_path: Path) -> GatewayStatus:
+def ensure_gateway(config: AppConfig, config_path: Path) -> GatewayStatus:
     status = gateway_status(config)
     if status.healthy:
         return status
@@ -63,7 +63,6 @@ def ensure_gateway(config: AppConfig, config_path: Path, pricing_path: Path) -> 
     state_dir().mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env["EMISSARY_ROUTER_CONFIG"] = str(config_path)
-    env["EMISSARY_ROUTER_PRICING"] = str(pricing_path)
     cmd = [
         sys.executable,
         "-m",
@@ -123,15 +122,13 @@ def stop_gateway() -> GatewayStatus:
 def exec_claude(
     config: AppConfig,
     config_path: Path,
-    pricing_path: Path,
     claude_command: str,
     claude_args: list[str],
     dry_run: bool = False,
 ) -> int:
-    status = ensure_gateway(config, config_path, pricing_path)
+    status = ensure_gateway(config, config_path)
     env = os.environ.copy()
     env["EMISSARY_ROUTER_CONFIG"] = str(config_path)
-    env["EMISSARY_ROUTER_PRICING"] = str(pricing_path)
     env["ANTHROPIC_BASE_URL"] = status.url
     if config.server.auth_key:
         env["ANTHROPIC_API_KEY"] = config.server.auth_key
@@ -140,7 +137,7 @@ def exec_claude(
 
     argv = [claude_command, *claude_args]
     if dry_run:
-        print(f"emissary-router gateway: {status.url} ({status.message})")
+        print(f"er gateway: {status.url} ({status.message})")
         print("exec:", " ".join(argv))
         print("env ANTHROPIC_BASE_URL=" + env["ANTHROPIC_BASE_URL"])
         if config.server.auth_key:
@@ -153,7 +150,7 @@ def exec_claude(
         os.execvpe(claude_command, argv, env)
     except FileNotFoundError:
         print(
-            f"emissary-router: could not find Claude Code command '{claude_command}'",
+            f"er: could not find Claude Code command '{claude_command}'",
             file=sys.stderr,
         )
         return 127

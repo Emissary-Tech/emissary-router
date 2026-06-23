@@ -18,6 +18,7 @@ dependencies = [
 ]
 
 [project.scripts]
+"er" = "emissary_router.cli:main"
 "emissary-router" = "emissary_router.cli:main"
 
 [tool.hatch.build.targets.wheel]
