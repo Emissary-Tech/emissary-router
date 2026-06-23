@@ -114,13 +114,14 @@ async function renderRequests() {
       <td>${esc(e.provider)}</td>
       <td>${esc(e.call_kind)}</td>
       <td>${usd(e.cost_usd)}</td>
-      <td>${e.cache_read_tokens > 0 ? "hit" : "-"}</td>
-      <td class="muted">${tokfmt(e.input_tokens)}/${tokfmt(e.output_tokens)}</td>
+      <td class="muted">${e.cache_read_tokens > 0 ? tokfmt(e.cache_read_tokens) + " read" : (e.cache_creation_tokens > 0 ? tokfmt(e.cache_creation_tokens) + " write" : "-")}</td>
+      <td class="muted">${tokfmt(e.input_tokens + e.cache_read_tokens + e.cache_creation_tokens)}/${tokfmt(e.output_tokens)}</td>
       <td><button class="del" data-id="${esc(e.id)}">delete</button></td>
     </tr>`).join("");
   $("requests").innerHTML = `
     <table><thead><tr><th>Time</th><th>Served</th><th>Status</th><th>Requested</th><th>Provider</th><th>Kind</th>
-      <th>Cost</th><th>Cache</th><th>In/Out tok</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+      <th>Cost</th><th>Cached</th><th>Prompt/Out tok</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+    <div class="note">Prompt = full input incl. cached tokens (matches the provider's view); Cached shows the read/written cache.</div>`;
   $("requests").querySelectorAll("button.del").forEach(b => b.onclick = async () => {
     await api("/api/events/" + encodeURIComponent(b.dataset.id), { method: "DELETE" });
     renderRequests(); renderSavings();
