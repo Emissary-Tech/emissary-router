@@ -12,7 +12,7 @@ from emissary_router.catalog import CATALOG, cost_score
 from emissary_router.config import AppConfig, load_config, user_config_path
 from emissary_router.dashboard.page import dashboard_html
 from emissary_router.dashboard.savings import compute_summary
-from emissary_router.telemetry import SqliteStore, TurnTracker
+from emissary_router.telemetry import SqliteStore
 
 
 def _read_raw_config(path: Path) -> dict:
@@ -62,7 +62,6 @@ def build_dashboard_router(
     store: SqliteStore,
     baseline_model: str,
     auth_key: str | None = None,
-    turns_tracker: TurnTracker | None = None,
     config_path: Path | None = None,
     on_config_change: Callable[[], None] | None = None,
 ) -> APIRouter:
@@ -151,10 +150,10 @@ def build_dashboard_router(
         data = compute_summary(store.aggregate_by_model(), baseline)
         return JSONResponse(data)
 
-    @router.get("/api/turns")
-    async def turns(limit: int = 200, session: str | None = None) -> JSONResponse:
+    @router.get("/api/sessions")
+    async def sessions(limit: int = 200) -> JSONResponse:
         limit = max(1, min(limit, 1000))
-        return JSONResponse({"turns": store.turns(session_id=session, limit=limit)})
+        return JSONResponse({"sessions": store.sessions(limit=limit)})
 
     @router.delete("/api/events/{event_id}")
     async def delete_event(event_id: str) -> JSONResponse:
@@ -164,8 +163,6 @@ def build_dashboard_router(
     @router.delete("/api/sessions/{session_id}")
     async def delete_session(session_id: str) -> JSONResponse:
         deleted = store.delete_session(session_id)
-        if turns_tracker is not None:
-            turns_tracker.forget(session_id)
         return JSONResponse({"deleted": deleted})
 
     return router

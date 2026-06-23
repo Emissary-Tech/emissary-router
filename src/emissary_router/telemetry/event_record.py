@@ -18,7 +18,6 @@ class EventRecord:
     id: str
     ts: float
     session_id: str | None
-    turn_id: int | None
     call_kind: str  # "main" | "background"
     requested_model: str | None
     served_model: str
@@ -49,41 +48,6 @@ def call_kind_from_body(body: dict[str, Any]) -> str:
     if isinstance(output_config, dict) and output_config.get("effort"):
         return "main"
     return "background"
-
-
-def _is_system_reminder(text: str) -> bool:
-    return text.lstrip().startswith("<system-reminder>")
-
-
-def latest_real_user_text(messages: Any) -> str | None:
-    """The most recent genuine user input, used as the per-turn anchor.
-
-    Skips tool_result continuations AND ``<system-reminder>`` blocks, which Claude Code
-    injects mid-conversation as user text. Those reminders evolve over a session, so
-    anchoring on them would split one user input into many turns. We anchor only on the
-    real prompt text, which stays stable across an agent loop and changes per new input.
-    """
-    if not isinstance(messages, list):
-        return None
-    for message in reversed(messages):
-        if not isinstance(message, dict) or message.get("role") != "user":
-            continue
-        content = message.get("content")
-        if isinstance(content, str):
-            if content.strip() and not _is_system_reminder(content):
-                return content
-            continue
-        if isinstance(content, list):
-            texts = [
-                block.get("text", "")
-                for block in content
-                if isinstance(block, dict)
-                and block.get("type") == "text"
-                and not _is_system_reminder(block.get("text", ""))
-            ]
-            if texts:
-                return "\n".join(texts)
-    return None
 
 
 def usage_tokens(usage: Usage) -> dict[str, int]:

@@ -31,6 +31,8 @@ _PAGE = """<!doctype html>
   .bar { height:10px; background:var(--accent); border-radius:5px; }
   button.del { background:none; border:1px solid var(--line); color:var(--muted); border-radius:6px; cursor:pointer; padding:2px 8px; }
   button.del:hover { color:#ff6b6b; border-color:#ff6b6b; }
+  button.iconbtn { background:none; border:1px solid var(--line); color:var(--muted); border-radius:8px; cursor:pointer; padding:5px 12px; font:inherit; }
+  button.iconbtn:hover { color:var(--fg); border-color:var(--accent); }
   .note { color:var(--muted); font-size:12px; margin-top:8px; }
   .empty { color:var(--muted); padding:40px; text-align:center; }
   select, input[type=number] { background:#0f1115; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font:inherit; }
@@ -45,14 +47,15 @@ _PAGE = """<!doctype html>
   <div class="tabs">
     <div class="tab active" data-view="savings">Savings</div>
     <div class="tab" data-view="requests">Requests</div>
-    <div class="tab" data-view="turns">Per-input</div>
+    <div class="tab" data-view="sessions">Sessions</div>
     <div class="tab" data-view="settings">Settings</div>
   </div>
+  <button id="refresh" class="iconbtn" title="Refresh">↻ Refresh</button>
 </header>
 <main>
   <section id="savings" class="view active"></section>
   <section id="requests" class="view"></section>
-  <section id="turns" class="view"></section>
+  <section id="sessions" class="view"></section>
   <section id="settings" class="view"></section>
 </main>
 <script>
@@ -124,28 +127,28 @@ async function renderRequests() {
   });
 }
 
-async function renderTurns() {
-  const { turns } = await api("/api/turns?limit=300");
-  if (!turns.length) { $("turns").innerHTML = '<div class="empty">No turns yet.</div>'; return; }
-  const rows = turns.map(t => {
-    const models = Object.entries(t.models).map(([m, n]) => `<span class="pill">${esc(m)}×${n}</span>`).join(" ");
+async function renderSessions() {
+  const { sessions } = await api("/api/sessions?limit=300");
+  if (!sessions.length) { $("sessions").innerHTML = '<div class="empty">No sessions yet.</div>'; return; }
+  const rows = sessions.map(s => {
+    const models = Object.entries(s.models).map(([m, n]) => `<span class="pill">${esc(m)}×${n}</span>`).join(" ");
     return `<tr>
-      <td class="muted">${when(t.first_ts)}</td>
-      <td class="muted" title="${esc(t.session_id)}">${esc((t.session_id || "?").slice(0, 8))} · #${t.turn_id}</td>
-      <td>${t.n_calls} <span class="muted">(${t.n_main} main / ${t.n_background} bg)</span></td>
+      <td class="muted">${when(s.last_ts)}</td>
+      <td class="muted" title="${esc(s.session_id)}">${esc((s.session_id || "?").slice(0, 8))}</td>
+      <td>${s.n_calls} <span class="muted">(${s.n_main} main / ${s.n_background} bg)</span></td>
       <td>${models}</td>
-      <td>${usd(t.cost_usd)}</td>
-      <td><button class="del" data-session="${esc(t.session_id)}">del session</button></td>
+      <td>${usd(s.cost_usd)}</td>
+      <td><button class="del" data-session="${esc(s.session_id)}">delete</button></td>
     </tr>`;
   }).join("");
-  $("turns").innerHTML = `
-    <table><thead><tr><th>Time</th><th>Session · turn</th><th>Calls</th><th>Models</th><th>Cost</th><th></th></tr></thead>
+  $("sessions").innerHTML = `
+    <table><thead><tr><th>Last activity</th><th>Session</th><th>Calls</th><th>Models</th><th>Cost</th><th></th></tr></thead>
       <tbody>${rows}</tbody></table>
-    <div class="note">One user input = one turn (main agent-loop calls + background calls).</div>`;
-  $("turns").querySelectorAll("button.del").forEach(b => b.onclick = async () => {
+    <div class="note">Each row is one Claude Code session — all of its calls grouped together.</div>`;
+  $("sessions").querySelectorAll("button.del").forEach(b => b.onclick = async () => {
     if (!b.dataset.session) return;
     await api("/api/sessions/" + encodeURIComponent(b.dataset.session), { method: "DELETE" });
-    renderTurns(); renderSavings();
+    renderSessions(); renderSavings();
   });
 }
 
@@ -207,7 +210,7 @@ async function renderSettings() {
   };
 }
 
-const renderers = { savings: renderSavings, requests: renderRequests, turns: renderTurns, settings: renderSettings };
+const renderers = { savings: renderSavings, requests: renderRequests, sessions: renderSessions, settings: renderSettings };
 document.querySelectorAll(".tab").forEach(tab => tab.onclick = () => {
   document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
   document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
@@ -216,6 +219,10 @@ document.querySelectorAll(".tab").forEach(tab => tab.onclick = () => {
   $(view).classList.add("active");
   renderers[view]();
 });
+document.getElementById("refresh").onclick = () => {
+  const active = document.querySelector(".tab.active");
+  if (active) renderers[active.dataset.view]();
+};
 renderSavings();
 </script>
 </body>

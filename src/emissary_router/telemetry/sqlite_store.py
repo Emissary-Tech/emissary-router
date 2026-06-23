@@ -13,7 +13,6 @@ CREATE TABLE IF NOT EXISTS events (
     id TEXT PRIMARY KEY,
     ts REAL NOT NULL,
     session_id TEXT,
-    turn_id INTEGER,
     call_kind TEXT,
     requested_model TEXT,
     served_model TEXT,
@@ -29,7 +28,7 @@ CREATE TABLE IF NOT EXISTS events (
     http_status INTEGER,
     raw_event TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_events_session_turn ON events (session_id, turn_id);
+CREATE INDEX IF NOT EXISTS idx_events_session ON events (session_id);
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events (ts);
 """
 
@@ -117,31 +116,29 @@ class SqliteStore:
         with self._connect() as conn:
             return int(conn.execute("SELECT COUNT(*) FROM events").fetchone()[0])
 
-    def turns(self, session_id: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
-        """Group calls into turns (session_id + turn_id), with per-model breakdown."""
-        where = "WHERE session_id = ?" if session_id else ""
-        params: list[Any] = [session_id] if session_id else []
-        query = f"""
-            SELECT session_id, turn_id, served_model, call_kind,
+    def sessions(self, limit: int = 200) -> list[dict[str, Any]]:
+        """Group calls by Claude Code session, with per-model breakdown."""
+        query = """
+            SELECT session_id, served_model, call_kind,
                    COUNT(*) AS n,
                    SUM(COALESCE(cost_usd, 0)) AS cost_usd,
-                   MIN(ts) AS first_ts
+                   MIN(ts) AS first_ts,
+                   MAX(ts) AS last_ts
             FROM events
-            {where}
-            GROUP BY session_id, turn_id, served_model, call_kind
+            GROUP BY session_id, served_model, call_kind
         """
         with self._connect() as conn:
-            rows = conn.execute(query, params).fetchall()
+            rows = conn.execute(query).fetchall()
 
-        turns: dict[tuple[Any, Any], dict[str, Any]] = {}
+        sessions: dict[Any, dict[str, Any]] = {}
         for row in rows:
-            key = (row["session_id"], row["turn_id"])
-            turn = turns.setdefault(
+            key = row["session_id"]
+            session = sessions.setdefault(
                 key,
                 {
                     "session_id": row["session_id"],
-                    "turn_id": row["turn_id"],
                     "first_ts": row["first_ts"],
+                    "last_ts": row["last_ts"],
                     "n_calls": 0,
                     "n_main": 0,
                     "n_background": 0,
@@ -149,24 +146,18 @@ class SqliteStore:
                     "models": {},
                 },
             )
-            turn["n_calls"] += row["n"]
-            turn["cost_usd"] += row["cost_usd"] or 0.0
-            turn["first_ts"] = min(turn["first_ts"], row["first_ts"])
+            session["n_calls"] += row["n"]
+            session["cost_usd"] += row["cost_usd"] or 0.0
+            session["first_ts"] = min(session["first_ts"], row["first_ts"])
+            session["last_ts"] = max(session["last_ts"], row["last_ts"])
             if row["call_kind"] == "background":
-                turn["n_background"] += row["n"]
+                session["n_background"] += row["n"]
             else:
-                turn["n_main"] += row["n"]
-            turn["models"][row["served_model"]] = turn["models"].get(row["served_model"], 0) + row["n"]
+                session["n_main"] += row["n"]
+            session["models"][row["served_model"]] = session["models"].get(row["served_model"], 0) + row["n"]
 
-        ordered = sorted(turns.values(), key=lambda turn: turn["first_ts"], reverse=True)
+        ordered = sorted(sessions.values(), key=lambda s: s["last_ts"], reverse=True)
         return ordered[:limit]
-
-    def max_turn_id(self, session_id: str) -> int:
-        with self._connect() as conn:
-            value = conn.execute(
-                "SELECT MAX(turn_id) FROM events WHERE session_id = ?", (session_id,)
-            ).fetchone()[0]
-        return int(value) if value is not None else 0
 
     # --- delete --------------------------------------------------------------
     def delete_event(self, event_id: str) -> int:

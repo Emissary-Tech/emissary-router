@@ -136,10 +136,10 @@ if rows:
     check("telemetry has served_model + route_reason + cost_usd",
           bool(last.get("served_model")) and bool(last.get("route_reason")) and ("cost_usd" in last),
           f"served={last.get('served_model')} reason={last.get('route_reason')}")
-    check("telemetry has session_id + turn_id + call_kind",
-          last.get("session_id") == "itest-session-1" and last.get("turn_id") is not None
+    check("telemetry has session_id + call_kind",
+          last.get("session_id") == "itest-session-1"
           and last.get("call_kind") in ("main", "background"),
-          f"session={last.get('session_id')} turn={last.get('turn_id')} kind={last.get('call_kind')}")
+          f"session={last.get('session_id')} kind={last.get('call_kind')}")
 
 # ---- dashboard API smoke ----
 print("[dashboard] api endpoints")
@@ -148,9 +148,9 @@ check("dashboard /api/summary", "total_cost_usd" in summary and "by_model" in su
       f"events={summary.get('total_events')} saved={summary.get('savings_usd')}")
 events = get("/api/events?limit=10")
 check("dashboard /api/events", isinstance(events.get("events"), list) and len(events["events"]) >= 1)
-turns = get("/api/turns")
-check("dashboard /api/turns groups by input", isinstance(turns.get("turns"), list) and len(turns["turns"]) >= 1,
-      f"turns={len(turns.get('turns', []))}")
+sessions = get("/api/sessions")
+check("dashboard /api/sessions groups by session", isinstance(sessions.get("sessions"), list) and len(sessions["sessions"]) >= 1,
+      f"sessions={len(sessions.get('sessions', []))}")
 
 # ---- direct bridge checks ----
 ant = AnthropicProvider(ProviderConfig(type="anthropic", api_key=os.environ["ANTHROPIC_API_KEY"]))
