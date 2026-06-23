@@ -17,9 +17,7 @@ from emissary_router.routing.request_to_classifier_input import request_to_class
 from emissary_router.telemetry import (
     EventRecord,
     SqliteStore,
-    TurnTracker,
     call_kind_from_body,
-    latest_real_user_text,
     usage_tokens,
 )
 
@@ -31,13 +29,11 @@ class RouterPipeline:
         self,
         config: AppConfig,
         store: SqliteStore | None = None,
-        turns: TurnTracker | None = None,
     ):
         self._config = config
         self._classifier = ClassifierClient(config.router)
         self._providers = self._build_providers()
         self._store = store
-        self._turns = turns or TurnTracker(store)
 
     def _build_providers(self):
         provider_names = {
@@ -57,16 +53,13 @@ class RouterPipeline:
         started_at = time.time()
         session_id = _header(headers, SESSION_HEADER)
         call_kind = call_kind_from_body(body)
-        turn_id = self._turns.turn_id(
-            session_id, latest_real_user_text(body.get("messages")), call_kind
-        )
         classifier_input, classifier_input_metadata = request_to_classifier_input(body)
 
         try:
             probabilities = await self._classifier.predict(classifier_input)
         except Exception as exc:  # classifier unreachable / unauthorized
             self._record_failure(
-                request_id, started_at, body, session_id, turn_id, call_kind,
+                request_id, started_at, body, session_id, call_kind,
                 "(classifier error)", _status_from_exc(exc),
             )
             return JSONResponse(
@@ -77,7 +70,7 @@ class RouterPipeline:
         missing_labels = self._missing_probability_labels(probabilities)
         if missing_labels:
             self._record_failure(
-                request_id, started_at, body, session_id, turn_id, call_kind,
+                request_id, started_at, body, session_id, call_kind,
                 "(routing error)", 502,
             )
             return JSONResponse(
@@ -107,7 +100,6 @@ class RouterPipeline:
                 id=request_id,
                 ts=time.time(),
                 session_id=session_id,
-                turn_id=turn_id,
                 call_kind=call_kind,
                 requested_model=body.get("model"),
                 served_model=decision.model_name,
@@ -135,7 +127,6 @@ class RouterPipeline:
         started_at: float,
         body: dict,
         session_id: str | None,
-        turn_id: int,
         call_kind: str,
         served_model: str,
         http_status: int | None,
@@ -145,7 +136,6 @@ class RouterPipeline:
                 id=request_id,
                 ts=time.time(),
                 session_id=session_id,
-                turn_id=turn_id,
                 call_kind=call_kind,
                 requested_model=body.get("model"),
                 served_model=served_model,

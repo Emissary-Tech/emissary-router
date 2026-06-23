@@ -8,7 +8,7 @@ from starlette.responses import JSONResponse
 from emissary_router.config import load_config, user_config_path
 from emissary_router.dashboard import build_dashboard_router
 from emissary_router.pipeline import RouterPipeline
-from emissary_router.telemetry import SqliteStore, TurnTracker
+from emissary_router.telemetry import SqliteStore
 
 
 def create_app() -> FastAPI:
@@ -23,10 +23,9 @@ def create_app() -> FastAPI:
         if config.telemetry.enabled
         else None
     )
-    turns = TurnTracker(store)
     app = FastAPI(title="Emissary Router")
     app.state.config = config
-    app.state.pipeline = RouterPipeline(config, store=store, turns=turns)
+    app.state.pipeline = RouterPipeline(config, store=store)
 
     def reload_config() -> None:
         # Rebuild the pipeline from the saved config so dashboard edits apply without
@@ -34,7 +33,7 @@ def create_app() -> FastAPI:
         # from the new pipeline; in-flight requests keep the one they already read.
         new_config = load_config(config_path)
         app.state.config = new_config
-        app.state.pipeline = RouterPipeline(new_config, store=store, turns=turns)
+        app.state.pipeline = RouterPipeline(new_config, store=store)
 
     if store is not None:
         app.include_router(
@@ -42,7 +41,6 @@ def create_app() -> FastAPI:
                 store,
                 baseline_model=config.default,
                 auth_key=config.server.auth_key,
-                turns_tracker=turns,
                 config_path=config_path,
                 on_config_change=reload_config,
             )
