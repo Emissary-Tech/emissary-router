@@ -54,8 +54,10 @@ Shorthands are also accepted: `true`/`false` means `{ "enabled": ... }`, and a b
 provider name means `{ "provider": ... }`. So `"claude-haiku-4.5": false` disables it
 and `"claude-haiku-4.5": "openrouter"` enables it on OpenRouter.
 
-Run `er models` to see the catalog, which entries are enabled, and each model's
-supported providers. Catalog order is cheap → expensive, and routing relies on it:
+Run `er models` to see the catalog, which entries are enabled, each model's supported
+providers, and its `cost_score`. Routing scans enabled models cheapest-first, where
+"cheapest" is **derived from each model's price** (not the catalog's listing order), so
+reordering the catalog can't change routing. Cheapest → most expensive today:
 
 1. `gemini-3.1-flash-lite`
 2. `claude-haiku-4.5`

@@ -24,7 +24,16 @@ class ModelSpec:
     pricing: TokenPricing
 
 
-# Cheap-to-expensive order. Routing policy relies on this insertion order.
+def cost_score(spec: ModelSpec) -> float:
+    """Blended $/Mtok used to order models cheap -> expensive for routing.
+
+    The cost ranking is DERIVED from pricing — never from dict insertion order — so
+    reordering CATALOG can't silently change which model is treated as "cheaper".
+    """
+    return spec.pricing.input + spec.pricing.output
+
+
+# Listed cheap -> expensive for readability only; routing derives order via cost_score.
 CATALOG: dict[str, ModelSpec] = {
     "gemini-3.1-flash-lite": ModelSpec(
         name="gemini-3.1-flash-lite",

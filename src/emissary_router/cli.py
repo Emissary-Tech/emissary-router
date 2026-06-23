@@ -9,7 +9,7 @@ from pathlib import Path
 
 import uvicorn
 
-from emissary_router.catalog import CATALOG, ROUTER_API_KEY_ENV
+from emissary_router.catalog import CATALOG, ROUTER_API_KEY_ENV, cost_score
 from emissary_router.config import (
     emissary_router_home,
     ensure_user_config,
@@ -89,8 +89,10 @@ def _cmd_init(args: argparse.Namespace) -> int:
 def _cmd_models(args: argparse.Namespace) -> int:
     config = load_config(Path(args.config) if args.config else None, strict_env=False)
     enabled = set(config.enabled_models())
+    # Cheapest first, derived from pricing (the order routing scans).
+    ordered = sorted(CATALOG.items(), key=lambda item: cost_score(item[1]))
     rows = []
-    for name, spec in CATALOG.items():
+    for name, spec in ordered:
         on = name in enabled
         resolved = config.resolve_model(name) if on else None
         rows.append(
@@ -101,6 +103,7 @@ def _cmd_models(args: argparse.Namespace) -> int:
                 "model_id": resolved.model_id if resolved else None,
                 "supported_providers": sorted(spec.providers),
                 "default_provider": spec.default_provider,
+                "cost_score": round(cost_score(spec), 4),
                 "default": name == config.default,
             }
         )
