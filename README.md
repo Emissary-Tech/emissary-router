@@ -61,7 +61,8 @@ Toggle models in `~/.emissary-router/config.json`:
     "gemini-3.1-flash-lite": { "enabled": true, "provider": "openrouter" }
   },
   "default": "claude-sonnet-4.6",
-  "confidence": 0.8
+  "confidence": 0.8,
+  "policy": "cache_aware"
 }
 ```
 

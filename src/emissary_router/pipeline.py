@@ -8,12 +8,14 @@ import uuid
 
 from starlette.responses import JSONResponse, Response
 
+from emissary_router.caching.ledger import CacheLedger
 from emissary_router.caching.usage import Usage
 from emissary_router.catalog import CATALOG, PROVIDER_ENV, TokenPricing
 from emissary_router.config import AppConfig, ProviderConfig
 from emissary_router.schemas import AnthropicRequest, RequestContext
 from emissary_router.providers.registry import build_provider
 from emissary_router.routing.classifier import ClassifierClient
+from emissary_router.routing.cache_cost import extract_request_cost_features
 from emissary_router.routing.policy import choose_model
 from emissary_router.routing.request_to_classifier_input import request_to_classifier_input
 from emissary_router.telemetry import JsonlTelemetry
@@ -24,6 +26,7 @@ class RouterPipeline:
         self._config = config
         self._classifier = ClassifierClient(config.router)
         self._providers = self._build_providers()
+        self._cache_ledger = CacheLedger()
         self._telemetry = (
             JsonlTelemetry(
                 Path(config.telemetry.log_path).expanduser(),
@@ -54,6 +57,7 @@ class RouterPipeline:
         request_id = str(uuid.uuid4())
         started_at = time.time()
         classifier_input, classifier_input_metadata = request_to_classifier_input(body)
+        cost_features = extract_request_cost_features(body, headers)
         probabilities = await self._classifier.predict(classifier_input)
         missing_labels = self._missing_probability_labels(probabilities)
         if missing_labels:
@@ -67,17 +71,23 @@ class RouterPipeline:
                 },
                 status_code=502,
             )
-        decision = choose_model(self._config, probabilities)
+        decision = choose_model(
+            self._config,
+            probabilities,
+            cost_features=cost_features,
+            cache_ledger=self._cache_ledger,
+        )
         model = self._config.resolve_model(decision.model_name)
         provider = self._providers[model.provider]
         context = RequestContext(
             request_id=request_id,
-            conversation_id=None,
+            conversation_id=cost_features.session_id,
             classifier_input=classifier_input,
             requested_model=body.get("model"),
         )
 
         def on_complete(usage: Usage, provider_metadata: dict) -> None:
+            self._cache_ledger.observe(model, cost_features, usage)
             self._write_telemetry(
                 {
                     "ts": time.time(),
@@ -90,6 +100,9 @@ class RouterPipeline:
                     "pricing_model": decision.model_name,
                     "route_reason": decision.reason,
                     "probabilities": decision.probabilities,
+                    "estimated_costs": decision.estimated_costs,
+                    "cache_prediction": decision.cache_prediction,
+                    "request_cost_features": cost_features.to_dict(),
                     "classifier_input": classifier_input_metadata,
                     "usage": asdict(usage),
                     "cost_usd": self._cost_usd(decision.model_name, usage),

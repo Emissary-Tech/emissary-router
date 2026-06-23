@@ -16,8 +16,14 @@ prompt text are never stored — only the metadata below.
 - `request_id` — unique id for the call
 - `requested_model` — the model Claude Code asked for
 - `served_model` / `provider` / `model_id` — what it was actually routed to
-- `route_reason` — `default` or `deviate_if_confident:p>=<confidence>`
+- `route_reason` — why the model was chosen, e.g. `cache_aware:default_after_cache`
+  or `cache_aware:p>=0.8:cheaper_after_cache`
 - `probabilities` — the classifier's per-model scores for the routing decision
+- `estimated_costs` — per-candidate cache-adjusted cost estimates used by
+  `cache_aware`
+- `cache_prediction` — whether the selected model was predicted warm, and with what
+  confidence
+- `request_cost_features` — token estimates used for the cache-aware decision
 - `classifier_input` — lightweight metadata about the classifier input (not the
   prompt text)
 - `usage` — normalized token counts (input, output, cache read, cache creation)
@@ -31,7 +37,8 @@ Example:
 {"ts": 1782100000.12, "duration_ms": 2310.4, "request_id": "…",
  "requested_model": "claude-sonnet-4-6", "served_model": "claude-haiku-4.5",
  "provider": "anthropic", "model_id": "claude-haiku-4-5",
- "route_reason": "deviate_if_confident:p>=0.8",
+ "route_reason": "cache_aware:p>=0.8:cheaper_after_cache",
+ "cache_prediction": {"warm": true, "cached_tokens": 18400, "confidence": "predictable"},
  "usage": {"input_tokens": 21000, "output_tokens": 640, "cache_read_input_tokens": 18400},
  "cost_usd": 0.0061, "cache": {"cache_hit": true}}
 ```

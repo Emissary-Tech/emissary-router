@@ -25,7 +25,7 @@ This is the full shipped config. Everything not shown uses defaults.
   },
   "default": "claude-sonnet-4.6",
   "confidence": 0.8,
-  "policy": "deviate_if_confident",
+  "policy": "cache_aware",
   "router": { "router_model": "emissary-model-router-shared" },
   "server": { "port": 8788 },
   "telemetry": { "enabled": true, "retention_days": 30, "max_events": 50000 }
@@ -100,16 +100,18 @@ ever save cost.
 
 ### `confidence`
 
-Float in `[0, 1]`, default `0.8`. The router scans enabled models cheap → expensive
-and picks the first whose classifier probability is `>= confidence`; if none qualify,
-it uses `default`. Higher `confidence` = more conservative (stays on `default` more
-often). See [routing](#routing).
+Float in `[0, 1]`, default `0.8`. Non-default models must meet this classifier
+probability before the router is allowed to consider them. Higher `confidence` = more
+conservative (stays on `default` more often). See [routing](#routing).
 
 ### `policy`
 
-The routing policy. Currently `deviate_if_confident` is the only value (the default),
-which uses `default` + `confidence` as described under [routing](#routing). The field
-is explicit so the active policy is visible and can be extended later.
+The routing policy. Supported values:
+
+- `cache_aware` (default) — use classifier confidence first, then compare estimated
+  cost after prompt-cache effects.
+- `deviate_if_confident` — simpler policy: scan enabled models cheap → expensive and
+  pick the first whose probability is `>= confidence`; otherwise use `default`.
 
 ### `router`
 
@@ -142,11 +144,14 @@ everything.
 
 ## Routing
 
-The single policy is `deviate_if_confident`: stay on `default`, and drop to the
-cheapest enabled model the classifier is confident about.
+The default policy is `cache_aware`: stay on `default` unless a cheaper enabled model
+passes the classifier confidence gate and is still cheaper after estimated cache
+read/write costs.
 
-- No enabled model meets `confidence` → `default`.
-- A cheaper enabled model meets it → that model (a "deviation").
+- No non-default model meets `confidence` → `default`.
+- A cheaper model meets `confidence`, but switching would lose an expensive warm cache
+  → `default`.
+- A cheaper model meets `confidence` and wins after cache-adjusted cost → that model.
 
 ## API keys
 
