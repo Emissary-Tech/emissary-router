@@ -16,16 +16,18 @@ _PAGE = """<!doctype html>
   .tab { padding:6px 14px; border-radius:8px; cursor:pointer; color:var(--muted); }
   .tab.active { background:var(--panel); color:var(--fg); }
   main { padding:24px; max-width:1100px; margin:0 auto; }
-  .view { display:none; } .view.active { display:block; }
+  .view { display:none; } .view.active { display:block; overflow-x:auto; }
   .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:14px; margin-bottom:24px; }
   .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; }
   .card .label { color:var(--muted); font-size:12px; }
   .card .value { font-size:24px; font-weight:600; margin-top:6px; }
   .card .value.good { color:var(--good); }
   table { width:100%; border-collapse:collapse; }
-  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); font-variant-numeric:tabular-nums; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); font-variant-numeric:tabular-nums; white-space:nowrap; }
   th { color:var(--muted); font-weight:500; font-size:12px; }
   tr:hover td { background:#1c2029; }
+  td.actcol, th.actcol { position:sticky; right:0; z-index:1; background:var(--bg); box-shadow:-1px 0 0 var(--line); }
+  tr:hover td.actcol { background:#1c2029; }
   .pill { display:inline-block; padding:1px 8px; border-radius:999px; background:#222836; color:var(--fg); font-size:12px; }
   .muted { color:var(--muted); }
   .bar { height:10px; background:var(--accent); border-radius:5px; }
@@ -116,11 +118,11 @@ async function renderRequests() {
       <td>${usd(e.cost_usd)}</td>
       <td class="muted">${e.cache_read_tokens > 0 ? tokfmt(e.cache_read_tokens) + " read" : (e.cache_creation_tokens > 0 ? tokfmt(e.cache_creation_tokens) + " write" : "-")}</td>
       <td class="muted">${tokfmt(e.input_tokens + e.cache_read_tokens + e.cache_creation_tokens)}/${tokfmt(e.output_tokens)}</td>
-      <td><button class="del" data-id="${esc(e.id)}">delete</button></td>
+      <td class="actcol"><button class="del" data-id="${esc(e.id)}">delete</button></td>
     </tr>`).join("");
   $("requests").innerHTML = `
     <table><thead><tr><th>Time</th><th>Served</th><th>Status</th><th>Requested</th><th>Provider</th><th>Kind</th>
-      <th>Cost</th><th>Cached</th><th>Prompt/Out tok</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+      <th>Cost</th><th>Cached</th><th>Prompt/Out tok</th><th class="actcol"></th></tr></thead><tbody>${rows}</tbody></table>
     <div class="note">Prompt = full input incl. cached tokens (matches the provider's view); Cached shows the read/written cache.</div>`;
   $("requests").querySelectorAll("button.del").forEach(b => b.onclick = async () => {
     await api("/api/events/" + encodeURIComponent(b.dataset.id), { method: "DELETE" });
@@ -139,11 +141,11 @@ async function renderSessions() {
       <td>${s.n_calls} <span class="muted">(${s.n_main} main / ${s.n_background} bg)</span></td>
       <td>${models}</td>
       <td>${usd(s.cost_usd)}</td>
-      <td><button class="del" data-session="${esc(s.session_id)}">delete</button></td>
+      <td class="actcol"><button class="del" data-session="${esc(s.session_id)}">delete</button></td>
     </tr>`;
   }).join("");
   $("sessions").innerHTML = `
-    <table><thead><tr><th>Last activity</th><th>Session</th><th>Calls</th><th>Models</th><th>Cost</th><th></th></tr></thead>
+    <table><thead><tr><th>Last activity</th><th>Session</th><th>Calls</th><th>Models</th><th>Cost</th><th class="actcol"></th></tr></thead>
       <tbody>${rows}</tbody></table>
     <div class="note">Each row is one Claude Code session — all of its calls grouped together.</div>`;
   $("sessions").querySelectorAll("button.del").forEach(b => b.onclick = async () => {
