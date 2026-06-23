@@ -33,6 +33,10 @@ _PAGE = """<!doctype html>
   button.del:hover { color:#ff6b6b; border-color:#ff6b6b; }
   .note { color:var(--muted); font-size:12px; margin-top:8px; }
   .empty { color:var(--muted); padding:40px; text-align:center; }
+  select, input[type=number] { background:#0f1115; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font:inherit; }
+  input[type=checkbox] { width:16px; height:16px; accent-color:var(--accent); }
+  .set-row { display:flex; align-items:center; gap:10px; padding:6px 0; }
+  button.primary { background:var(--accent); border:none; color:#fff; border-radius:8px; padding:8px 16px; cursor:pointer; font:inherit; }
 </style>
 </head>
 <body>
@@ -42,12 +46,14 @@ _PAGE = """<!doctype html>
     <div class="tab active" data-view="savings">Savings</div>
     <div class="tab" data-view="requests">Requests</div>
     <div class="tab" data-view="turns">Per-input</div>
+    <div class="tab" data-view="settings">Settings</div>
   </div>
 </header>
 <main>
   <section id="savings" class="view active"></section>
   <section id="requests" class="view"></section>
   <section id="turns" class="view"></section>
+  <section id="settings" class="view"></section>
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -91,10 +97,16 @@ async function renderSavings() {
 async function renderRequests() {
   const { events } = await api("/api/events?limit=300");
   if (!events.length) { $("requests").innerHTML = '<div class="empty">No requests yet.</div>'; return; }
+  const st = (e) => {
+    if (e.http_status == null) return '<td class="muted">-</td>';
+    const bad = e.http_status >= 400;
+    return `<td style="color:${bad ? "#ff6b6b" : "var(--good)"}">${e.http_status}</td>`;
+  };
   const rows = events.map(e => `
     <tr>
       <td class="muted">${when(e.ts)}</td>
       <td><span class="pill">${esc(e.served_model)}</span></td>
+      ${st(e)}
       <td class="muted">${esc(e.requested_model) || "-"}</td>
       <td>${esc(e.provider)}</td>
       <td>${esc(e.call_kind)}</td>
@@ -104,7 +116,7 @@ async function renderRequests() {
       <td><button class="del" data-id="${esc(e.id)}">delete</button></td>
     </tr>`).join("");
   $("requests").innerHTML = `
-    <table><thead><tr><th>Time</th><th>Served</th><th>Requested</th><th>Provider</th><th>Kind</th>
+    <table><thead><tr><th>Time</th><th>Served</th><th>Status</th><th>Requested</th><th>Provider</th><th>Kind</th>
       <th>Cost</th><th>Cache</th><th>In/Out tok</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
   $("requests").querySelectorAll("button.del").forEach(b => b.onclick = async () => {
     await api("/api/events/" + encodeURIComponent(b.dataset.id), { method: "DELETE" });
@@ -137,7 +149,65 @@ async function renderTurns() {
   });
 }
 
-const renderers = { savings: renderSavings, requests: renderRequests, turns: renderTurns };
+async function renderSettings() {
+  const cfg = await api("/api/config");
+  const toggles = cfg.models.map(m => {
+    const prov = m.providers.length > 1
+      ? `<select data-provider="${esc(m.name)}" style="margin-left:auto">${m.providers.map(p => `<option ${p === m.provider ? "selected" : ""}>${esc(p)}</option>`).join("")}</select>`
+      : `<span class="muted" style="margin-left:auto">${esc(m.provider)}</span>`;
+    return `<label class="set-row">
+      <input type="checkbox" data-model="${esc(m.name)}" ${m.enabled ? "checked" : ""}>
+      <span>${esc(m.name)}</span>
+      <span class="muted">$${m.cost_score.toFixed(2)}/Mtok</span>
+      ${prov}
+    </label>`;
+  }).join("");
+  $("settings").innerHTML = `
+    <div class="cards" style="grid-template-columns:1fr 1fr">
+      <div class="card"><div class="label">Enabled models</div><div id="toggles">${toggles}</div></div>
+      <div class="card">
+        <div class="label">Default model (stay here unless confident)</div>
+        <div class="set-row"><select id="default-select"></select></div>
+        <div class="label" style="margin-top:14px">Confidence — deviate to a cheaper model when p ≥ this</div>
+        <div class="set-row"><input type="number" id="confidence" min="0" max="1" step="0.05" value="${cfg.confidence}"></div>
+      </div>
+    </div>
+    <button class="primary" id="save-config">Save</button>
+    <span id="save-msg" class="note" style="margin-left:10px"></span>
+    <div class="note">Changes are written to your config file and applied to the running gateway.</div>`;
+  const rebuildDefault = () => {
+    const enabled = [...document.querySelectorAll("#settings [data-model]")].filter(c => c.checked).map(c => c.dataset.model);
+    const cur = $("default-select").value || cfg.default;
+    $("default-select").innerHTML = enabled.length
+      ? enabled.map(n => `<option ${n === cur ? "selected" : ""}>${esc(n)}</option>`).join("")
+      : `<option value="">(enable a model)</option>`;
+  };
+  document.querySelectorAll("#settings [data-model]").forEach(c => c.onchange = rebuildDefault);
+  rebuildDefault();
+  $("save-config").onclick = async () => {
+    const models = {};
+    document.querySelectorAll("#settings [data-model]").forEach(c => {
+      const sel = document.querySelector(`#settings [data-provider="${c.dataset.model}"]`);
+      models[c.dataset.model] = { enabled: c.checked, provider: sel ? sel.value : null };
+    });
+    const headers = { "content-type": "application/json" };
+    if (KEY) headers["x-api-key"] = KEY;
+    const body = JSON.stringify({ models, default: $("default-select").value, confidence: parseFloat($("confidence").value) });
+    const r = await fetch("/api/config", { method: "PUT", headers, body });
+    const j = await r.json().catch(() => ({}));
+    const msg = $("save-msg");
+    if (r.ok) {
+      msg.textContent = j.restart_required ? "Saved — run `er restart` to apply." : "Saved and applied.";
+      msg.style.color = "var(--good)";
+      renderSavings();
+    } else {
+      msg.textContent = "Error: " + (j.error || r.status);
+      msg.style.color = "#ff6b6b";
+    }
+  };
+}
+
+const renderers = { savings: renderSavings, requests: renderRequests, turns: renderTurns, settings: renderSettings };
 document.querySelectorAll(".tab").forEach(tab => tab.onclick = () => {
   document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
   document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));

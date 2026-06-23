@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from emissary_router.config import PricingConfig, TokenPricing
+from emissary_router.catalog import CATALOG, TokenPricing
 
 
 def _cost_for_tokens(price: TokenPricing, row: dict[str, Any]) -> float:
@@ -17,13 +17,13 @@ def _cost_for_tokens(price: TokenPricing, row: dict[str, Any]) -> float:
 
 def compute_summary(
     aggregates: list[dict[str, Any]],
-    pricing: PricingConfig,
     baseline_model: str,
 ) -> dict[str, Any]:
     """Totals + estimated savings vs sending every call to the baseline model.
 
-    Savings is an estimate: it applies the baseline model's prices to each call's
-    actual token counts, which differ from what the baseline model would really emit.
+    Pricing comes from the built-in catalog. Savings is an estimate: it applies the
+    baseline model's prices to each call's actual token counts, which differ from what
+    the baseline model would really emit.
     """
     total_cost = sum((row.get("cost_usd") or 0.0) for row in aggregates)
     total_events = sum((row.get("n") or 0) for row in aggregates)
@@ -37,8 +37,8 @@ def compute_summary(
         for row in aggregates
     ]
 
-    baseline_price = pricing.pricing.get(baseline_model)
-    if baseline_price is None:
+    spec = CATALOG.get(baseline_model)
+    if spec is None:
         return {
             "total_events": total_events,
             "total_cost_usd": round(total_cost, 6),
@@ -50,7 +50,7 @@ def compute_summary(
             "by_model": by_model,
         }
 
-    baseline_cost = sum(_cost_for_tokens(baseline_price, row) for row in aggregates)
+    baseline_cost = sum(_cost_for_tokens(spec.pricing, row) for row in aggregates)
     savings = baseline_cost - total_cost
     savings_pct = (savings / baseline_cost * 100) if baseline_cost > 0 else 0.0
     return {

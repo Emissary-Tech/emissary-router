@@ -5,13 +5,8 @@ import time
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from emissary_router.config import PricingConfig, TokenPricing
 from emissary_router.dashboard import build_dashboard_router
 from emissary_router.telemetry import EventRecord, SqliteStore, TurnTracker
-
-PRICING = PricingConfig(
-    pricing={"claude-sonnet-4.6": TokenPricing(input=3, output=15, cache_read=0.3, cache_write_5m=3.75)}
-)
 
 
 def _store(tmp_path) -> SqliteStore:
@@ -31,7 +26,7 @@ def _store(tmp_path) -> SqliteStore:
 def _client(store, auth_key=None, tracker=None) -> TestClient:
     app = FastAPI()
     app.include_router(
-        build_dashboard_router(store, PRICING, "claude-sonnet-4.6", auth_key=auth_key, turns_tracker=tracker)
+        build_dashboard_router(store, "claude-sonnet-4.6", auth_key=auth_key, turns_tracker=tracker)
     )
     return TestClient(app)
 

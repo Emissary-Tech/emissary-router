@@ -191,7 +191,7 @@ class TelemetryConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
-    log_path: str = "~/.emissary-router/events.jsonl"
+    db_path: str = "~/.emissary-router/events.sqlite3"
     retention_days: int | None = Field(default=30, ge=0)
     max_events: int | None = Field(default=50000, ge=0)
 

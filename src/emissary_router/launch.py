@@ -157,6 +157,8 @@ def exec_claude(
     open_dashboard: bool = True,
 ) -> int:
     status = ensure_gateway(config, config_path)
+    if not dry_run:
+        announce_dashboard(config, status, open_browser=open_dashboard)
     env = os.environ.copy()
     env["EMISSARY_ROUTER_CONFIG"] = str(config_path)
     env["ANTHROPIC_BASE_URL"] = status.url
