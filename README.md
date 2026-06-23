@@ -49,6 +49,18 @@ er stop
 Installing from a clone instead? Run `bash install.sh` (editable install), then
 `er init`.
 
+## Dashboard
+
+`er code` and `er start` open a local dashboard in your browser showing cost savings,
+recent requests, and per-session usage — plus a Settings tab to toggle models live:
+
+```text
+http://127.0.0.1:8788/dashboard
+```
+
+It stays up while the gateway runs, so reopen the URL any time. See
+[Dashboard](docs/dashboard.md).
+
 ## Supported Models
 
 Toggle models in `~/.emissary-router/config.json`:
@@ -79,6 +91,7 @@ the built-in catalog. See [Configuration](docs/configuration.md) for details.
 
 - [Configuration](docs/configuration.md)
 - [Commands](docs/commands.md)
+- [Dashboard](docs/dashboard.md)
 - [Providers and Caching](docs/providers-caching.md)
 - [Pricing](docs/pricing.md)
 - [Thinking](docs/thinking.md)
