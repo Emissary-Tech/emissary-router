@@ -5,26 +5,14 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from starlette.responses import JSONResponse
 
-from emissary_router.config import load_config, load_pricing
-from emissary_router.dashboard import build_dashboard_router
+from emissary_router.config import load_config
 from emissary_router.pipeline import RouterPipeline
 from emissary_router.telemetry import SqliteStore, TurnTracker
 
 
 def create_app() -> FastAPI:
     config = load_config()
-    pricing = load_pricing()
-    store = (
-        SqliteStore(
-            Path(config.telemetry.db_path),
-            retention_days=config.telemetry.retention_days,
-            max_events=config.telemetry.max_events,
-        )
-        if config.telemetry.enabled
-        else None
-    )
-    turns = TurnTracker(store)
-    pipeline = RouterPipeline(config, pricing, store=store, turns=turns)
+    pipeline = RouterPipeline(config)
     app = FastAPI(title="Emissary Router")
     if store is not None:
         app.include_router(
@@ -41,8 +29,8 @@ def create_app() -> FastAPI:
     async def health() -> dict:
         return {
             "ok": True,
-            "default": config.router.default,
-            "policy": config.router.policy.name,
+            "default": config.default,
+            "policy": "deviate_if_confident",
         }
 
     @app.post("/v1/messages")

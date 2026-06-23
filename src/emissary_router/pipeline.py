@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-import json
+from dataclasses import asdict
+import os
+from pathlib import Path
 import time
 import uuid
 
 from starlette.responses import JSONResponse, Response
 
 from emissary_router.caching.usage import Usage
-from emissary_router.config import AppConfig, PricingConfig, TokenPricing
+from emissary_router.catalog import CATALOG, PROVIDER_ENV, TokenPricing
+from emissary_router.config import AppConfig, ProviderConfig
 from emissary_router.schemas import AnthropicRequest, RequestContext
 from emissary_router.providers.registry import build_provider
 from emissary_router.routing.classifier import ClassifierClient
@@ -26,22 +29,35 @@ SESSION_HEADER = "x-claude-code-session-id"
 
 
 class RouterPipeline:
-    def __init__(
-        self,
-        config: AppConfig,
-        pricing: PricingConfig,
-        store: SqliteStore | None = None,
-        turns: TurnTracker | None = None,
-    ):
+    def __init__(self, config: AppConfig):
         self._config = config
-        self._pricing = pricing
         self._classifier = ClassifierClient(config.router)
-        self._providers = {
-            name: build_provider(name, provider_config)
-            for name, provider_config in config.providers.items()
+        self._providers = self._build_providers()
+        self._telemetry = (
+            JsonlTelemetry(
+                Path(config.telemetry.log_path).expanduser(),
+                retention_days=config.telemetry.retention_days,
+                max_events=config.telemetry.max_events,
+            )
+            if config.telemetry.enabled
+            else None
+        )
+
+    def _build_providers(self):
+        provider_names = {
+            self._config.resolve_model(model_name).provider
+            for model_name in self._config.enabled_models()
         }
-        self._store = store
-        self._turns = turns or TurnTracker(store)
+        return {
+            name: build_provider(
+                name,
+                ProviderConfig(
+                    type=name,
+                    api_key=os.environ.get(PROVIDER_ENV[name]),
+                ),
+            )
+            for name in provider_names
+        }
 
     async def handle_messages(self, body: dict, headers: dict[str, str]) -> Response:
         request_id = str(uuid.uuid4())
@@ -78,24 +94,28 @@ class RouterPipeline:
         )
 
         def on_complete(usage: Usage, provider_metadata: dict) -> None:
-            tokens = usage_tokens(usage)
-            record = EventRecord(
-                id=request_id,
-                ts=time.time(),
-                session_id=session_id,
-                turn_id=turn_id,
-                call_kind=call_kind,
-                requested_model=body.get("model"),
-                served_model=decision.model_name,
-                provider=model.provider,
-                model_id=model.model_id,
-                route_reason=decision.reason,
-                cost_usd=self._cost_usd(decision.model_name, usage),
-                duration_ms=round((time.time() - started_at) * 1000, 3),
-                raw_event=self._raw_event(
-                    decision, classifier_input, classifier_input_metadata, provider_metadata
-                ),
-                **tokens,
+            self._write_telemetry(
+                {
+                    "ts": time.time(),
+                    "duration_ms": round((time.time() - started_at) * 1000, 3),
+                    "request_id": request_id,
+                    "requested_model": body.get("model"),
+                    "served_model": decision.model_name,
+                    "provider": model.provider,
+                    "model_id": model.model_id,
+                    "pricing_model": decision.model_name,
+                    "route_reason": decision.reason,
+                    "probabilities": decision.probabilities,
+                    "classifier_input": classifier_input_metadata,
+                    "usage": asdict(usage),
+                    "cost_usd": self._cost_usd(decision.model_name, usage),
+                    "cache": {
+                        "cache_read_input_tokens": usage.cache_read_input_tokens,
+                        "cache_creation_input_tokens": usage.cache_creation_input_tokens,
+                        "cache_hit": usage.cache_read_input_tokens > 0,
+                    },
+                    "provider_metadata": provider_metadata,
+                }
             )
             self._write(record)
 
@@ -130,16 +150,12 @@ class RouterPipeline:
         return json.dumps(payload, ensure_ascii=False)
 
     def _missing_probability_labels(self, probabilities: dict[str, float]) -> list[str]:
-        expected = set(self._config.router.enabled)
-        expected.add(self._config.router.default)
-        expected.update(self._config.router.policy.candidates)
+        expected = set(self._config.enabled_models())
+        expected.add(self._config.default)
         return sorted(label for label in expected if label not in probabilities)
 
     def _cost_usd(self, model_name: str, usage: Usage) -> float | None:
-        price = self._pricing.pricing.get(model_name)
-        if price is None:
-            return None
-        return _cost_usd(price, usage)
+        return _cost_usd(CATALOG[model_name].pricing, usage)
 
     def _write(self, record: EventRecord) -> None:
         if self._store is None:
