@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from router.server import _authorized, _strip_router_auth
+from emissary_router.server import _authorized, _strip_router_auth
 
 
 def test_router_auth_key_accepts_x_api_key() -> None:

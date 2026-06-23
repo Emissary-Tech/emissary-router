@@ -3,7 +3,7 @@ requires = ["hatchling>=1.24"]
 build-backend = "hatchling.build"
 
 [project]
-name = "router"
+name = "emissary-router"
 version = "0.1.0"
 description = "Pure-Python Claude Code routing gateway"
 readme = "README.md"
@@ -18,10 +18,11 @@ dependencies = [
 ]
 
 [project.scripts]
-router = "router.cli:main"
+"er" = "emissary_router.cli:main"
+"emissary-router" = "emissary_router.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/router"]
+packages = ["src/emissary_router"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

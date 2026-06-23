@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from router.config import ProviderConfig
-from router.providers.google import GoogleProvider
+from emissary_router.config import ProviderConfig
+from emissary_router.providers.google import GoogleProvider
 
 
 def test_google_request_maps_anthropic_tools_and_results() -> None:
@@ -129,17 +129,48 @@ def test_google_thinking_effort_mapping_preserves_minimal() -> None:
     assert gemini3["generationConfig"]["thinkingConfig"]["thinkingLevel"] == "minimal"
 
 
-def test_google_thinking_budget_maps_to_level() -> None:
+def test_google_thinking_effort_clamps_from_model_capability() -> None:
+    body = {"thinking": {"effort": "xhigh"}}
+
+    gemini3 = GoogleProvider.to_google_request(
+        body,
+        "gemini-3.1-flash-lite",
+        "gemini-3.1-flash-lite",
+    )
+
+    assert gemini3["generationConfig"]["thinkingConfig"]["thinkingLevel"] == "high"
+
+
+def test_google_output_config_effort_drives_adaptive_thinking_level() -> None:
+    body = {
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": "high"},
+    }
+
+    gemini3 = GoogleProvider.to_google_request(body, "gemini-3.1-flash-lite")
+
+    assert gemini3["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "high"}
+
+
+def test_google_budget_only_thinking_passes_thinking_budget() -> None:
     body = {"thinking": {"type": "enabled", "budget_tokens": 2048}}
 
     gemini3 = GoogleProvider.to_google_request(body, "gemini-3.1-flash-lite")
 
-    assert gemini3["generationConfig"]["thinkingConfig"]["thinkingLevel"] == "low"
+    assert gemini3["generationConfig"]["thinkingConfig"] == {"thinkingBudget": 2048}
 
 
-def test_google_disabled_thinking_maps_to_minimal() -> None:
+def test_google_disabled_thinking_maps_to_zero_budget() -> None:
     body = {"thinking": {"type": "disabled"}}
 
     gemini3 = GoogleProvider.to_google_request(body, "gemini-3.1-flash-lite")
 
-    assert gemini3["generationConfig"]["thinkingConfig"]["thinkingLevel"] == "minimal"
+    assert gemini3["generationConfig"]["thinkingConfig"] == {"thinkingBudget": 0}
+
+
+def test_google_adaptive_thinking_without_effort_uses_dynamic_budget() -> None:
+    body = {"thinking": {"type": "adaptive"}}
+
+    gemini3 = GoogleProvider.to_google_request(body, "gemini-3.1-flash-lite")
+
+    assert gemini3["generationConfig"]["thinkingConfig"] == {"thinkingBudget": -1}

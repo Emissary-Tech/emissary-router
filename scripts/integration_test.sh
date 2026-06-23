@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end integration test for `router`.
+# End-to-end integration test for emissary-router.
 #
 # Verifies the real Claude Code path against live provider APIs:
 #   install/CLI lifecycle -> gateway routing + telemetry (real classifier)
@@ -8,8 +8,8 @@
 # Keys: copy scripts/test_env.sh.example -> scripts/test_env.sh and fill in real
 # keys (gitignored; this script sources it automatically). Then just run:
 #   bash scripts/integration_test.sh
-# (Or just export ANTHROPIC_API_KEY / GOOGLE_API_KEY / OPENROUTER_API_KEY /
-#  ROUTER_KEY yourself instead of creating test_env.sh.)
+# (Or export ANTHROPIC_API_KEY / OPENROUTER_API_KEY / EMISSARY_ROUTER_API_KEY
+#  yourself instead of creating test_env.sh.)
 #
 # Optional overrides:
 #   ROUTER_CLASSIFIER_URL   (default https://api.withemissary.com/v1/classification)
@@ -27,15 +27,18 @@ if [ -f "$ROOT/scripts/test_env.sh" ]; then
   # shellcheck disable=SC1091
   source "$ROOT/scripts/test_env.sh"
 fi
+if [ -z "${EMISSARY_ROUTER_API_KEY:-}" ] && [ -n "${ROUTER_KEY:-}" ]; then
+  export EMISSARY_ROUTER_API_KEY="$ROUTER_KEY"
+fi
 
 # --- 0b. require env ----------------------------------------------------------
 missing=()
-for v in ANTHROPIC_API_KEY GOOGLE_API_KEY OPENROUTER_API_KEY ROUTER_KEY; do
+for v in ANTHROPIC_API_KEY OPENROUTER_API_KEY EMISSARY_ROUTER_API_KEY; do
   [ -n "${!v:-}" ] || missing+=("$v")
 done
 if [ "${#missing[@]}" -gt 0 ]; then
   echo "missing required env: ${missing[*]}" >&2
-  echo "hint: set -a; source ../.env; set +a; export ROUTER_KEY=<classifier key>" >&2
+  echo "hint: create scripts/test_env.sh (see test_env.sh.example) or export the keys" >&2
   exit 2
 fi
 
@@ -43,55 +46,35 @@ CLASS_URL="${ROUTER_CLASSIFIER_URL:-https://api.withemissary.com/v1/classificati
 CLASS_MODEL="${ROUTER_CLASSIFIER_MODEL:-emissary-model-router-shared}"
 PORT="${ROUTER_TEST_PORT:-8799}"
 
-# --- isolated state + cleanup -------------------------------------------------
+# --- isolated home (config/logs/pid/telemetry) + cleanup ----------------------
 WORK="$(mktemp -d)"
-export ROUTER_STATE_DIR="$WORK/state"
-mkdir -p "$ROUTER_STATE_DIR"
-TELOG="$ROUTER_STATE_DIR/events.jsonl"
+export EMISSARY_ROUTER_HOME="$WORK/home"
+mkdir -p "$EMISSARY_ROUTER_HOME"
+TELOG="$EMISSARY_ROUTER_HOME/events.jsonl"
 CFG="$WORK/config.yaml"
-PRICING="$ROOT/pricing.example.yaml"
-cleanup() { router stop >/dev/null 2>&1 || true; rm -rf "$WORK"; }
+cleanup() { er stop >/dev/null 2>&1 || true; rm -rf "$WORK"; }
 trap cleanup EXIT
 
 # --- 1. install (editable) if the CLI is not already available ----------------
-if ! command -v router >/dev/null 2>&1; then
-  echo "[setup] installing router (editable)..."
+if ! command -v er >/dev/null 2>&1; then
+  echo "[setup] installing emissary-router (editable)..."
   python3 -m pip install -e . -q
 fi
 
 # --- 2. write test config (Gemini via OpenRouter = the supported tool path) ----
 cat > "$CFG" <<YAML
+models:
+  claude-sonnet-4.6: true
+  claude-haiku-4.5: true
+  gemini-3.1-flash-lite: true
+default: claude-sonnet-4.6
+confidence: 0.8
 server:
   host: 127.0.0.1
   port: $PORT
 router:
-  default: claude-sonnet-4.6
-  enabled: [claude-sonnet-4.6, claude-haiku-4.5, gemini-3.1-flash-lite]
-  policy:
-    name: cheap_first
-    tau: 0.85
-    candidates: [gemini-3.1-flash-lite, claude-haiku-4.5, claude-sonnet-4.6]
-providers:
-  anthropic:
-    api_key: \${ANTHROPIC_API_KEY}
-  google:
-    api_key: \${GOOGLE_API_KEY}
-  openrouter:
-    api_key: \${OPENROUTER_API_KEY}
-models:
-  claude-sonnet-4.6:
-    provider: anthropic
-    model_id: claude-sonnet-4-6
-  claude-haiku-4.5:
-    provider: anthropic
-    model_id: claude-haiku-4-5
-  gemini-3.1-flash-lite:
-    provider: openrouter
-    model_id: google/gemini-3.1-flash-lite
-classifier:
   url: $CLASS_URL
-  api_key: \${ROUTER_KEY}
-  model: $CLASS_MODEL
+  router_model: $CLASS_MODEL
 telemetry:
   enabled: true
   log_path: $TELOG
@@ -99,10 +82,10 @@ YAML
 
 # --- 3. CLI lifecycle ---------------------------------------------------------
 echo "[lifecycle] validate-config"
-router validate-config --config "$CFG" --pricing "$PRICING" >/dev/null
+er validate-config --config "$CFG" >/dev/null
 echo "[lifecycle] start (background)"
-router start --config "$CFG" --pricing "$PRICING" >/dev/null
-router status --config "$CFG" | grep -q '"healthy": true' \
+er start --config "$CFG" >/dev/null
+er status --config "$CFG" | grep -q '"healthy": true' \
   || { echo "  FAIL gateway did not become healthy"; exit 1; }
 echo "  PASS gateway healthy on :$PORT"
 
@@ -110,10 +93,10 @@ echo "  PASS gateway healthy on :$PORT"
 python3 - "$PORT" "$TELOG" <<'PY'
 import sys, os, json, asyncio, urllib.request
 PORT, TELOG = sys.argv[1], sys.argv[2]
-from router.config import ProviderConfig, ResolvedModel
-from router.ir import AnthropicRequest, RequestContext
-from router.providers.anthropic import AnthropicProvider
-from router.providers.openrouter import OpenRouterProvider
+from emissary_router.config import ProviderConfig, ResolvedModel
+from emissary_router.schemas import AnthropicRequest, RequestContext
+from emissary_router.providers.anthropic import AnthropicProvider
+from emissary_router.providers.openrouter import OpenRouterProvider
 
 fails = []
 def check(name, ok, detail=""):
@@ -149,14 +132,14 @@ if rows:
 # ---- direct bridge checks ----
 ant = AnthropicProvider(ProviderConfig(type="anthropic", api_key=os.environ["ANTHROPIC_API_KEY"]))
 orp = OpenRouterProvider(ProviderConfig(type="openrouter", api_key=os.environ["OPENROUTER_API_KEY"]))
-def rm(mid): return ResolvedModel(name=mid, provider="x", model_id=mid)
+def rm(mid, provider): return ResolvedModel(name=mid, provider=provider, model_id=mid)
 
 async def call(prov, mid, body):
     cap = {}
     resp = await prov.messages(
         AnthropicRequest(body=body, headers={"anthropic-version": "2023-06-01"}),
-        model=rm(mid),
-        context=RequestContext(request_id="t", conversation_id="c", router_view="", requested_model=mid),
+        model=rm(mid, prov.name),
+        context=RequestContext(request_id="t", conversation_id="c", classifier_input="", requested_model=mid),
         on_complete=lambda u, m: cap.update(u=u, m=m))
     return resp, cap
 
