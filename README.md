@@ -19,7 +19,7 @@ Then set up config and API keys:
 er init
 ```
 
-`er init` creates `~/.emissary-router/config.yaml` and prompts for your keys (it skips
+`er init` creates `~/.emissary-router/config.json` and prompts for your keys (it skips
 any already in your environment), writing them to `~/.emissary-router/.env`. Run it
 again any time to change a key. You can also just export the keys instead:
 
@@ -47,25 +47,29 @@ Installing from a clone instead? Run `bash install.sh` (editable install), then
 
 ## Supported Models
 
-Toggle models in `~/.emissary-router/config.yaml`:
+Toggle models in `~/.emissary-router/config.json`:
 
-```yaml
-models:
-  claude-sonnet-4.6: true
-  claude-haiku-4.5: true
-  gemini-3.1-flash-lite: true
-default: claude-sonnet-4.6
-confidence: 0.8
+```json
+{
+  "models": {
+    "claude-sonnet-4.6": { "enabled": true, "provider": "anthropic" },
+    "claude-haiku-4.5": { "enabled": true, "provider": "anthropic" },
+    "gemini-3.1-flash-lite": { "enabled": true, "provider": "openrouter" }
+  },
+  "default": "claude-sonnet-4.6",
+  "confidence": 0.8
+}
 ```
 
 Built-in models:
 
-- `claude-sonnet-4.6`
-- `claude-haiku-4.5`
-- `gemini-3.1-flash-lite` via OpenRouter
+- `claude-sonnet-4.6` — Anthropic or OpenRouter
+- `claude-haiku-4.5` — Anthropic or OpenRouter
+- `gemini-3.1-flash-lite` — OpenRouter
 
-Users cannot add arbitrary upstream models in V1; provider, model id, and pricing
-are owned by the built-in catalog.
+Set `enabled: false` to drop a model, and `provider` to choose how it's served.
+Users cannot add arbitrary upstream models in V1; model id and pricing are owned by
+the built-in catalog. See [Configuration](docs/configuration.md) for details.
 
 ## Docs
 

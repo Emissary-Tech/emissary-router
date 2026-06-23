@@ -59,3 +59,44 @@ def test_init_non_interactive_writes_template(tmp_path, monkeypatch):
     assert _cmd_init(argparse.Namespace(no_prompt=False)) == 0
     assert user_config_path().exists()
     assert user_env_path().exists()
+
+
+def test_init_no_prompt_adds_missing_required_keys(tmp_path, monkeypatch):
+    monkeypatch.setenv("EMISSARY_ROUTER_HOME", str(tmp_path))
+    monkeypatch.delenv("EMISSARY_ROUTER_CONFIG", raising=False)
+    monkeypatch.chdir(tmp_path)
+    for key in ["EMISSARY_ROUTER_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY"]:
+        monkeypatch.delenv(key, raising=False)
+    env_path = user_env_path()
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    env_path.write_text("EMISSARY_ROUTER_API_KEY=mykey\n")
+
+    assert _cmd_init(argparse.Namespace(no_prompt=True)) == 0
+    env = read_env_file(env_path)
+    assert env["EMISSARY_ROUTER_API_KEY"] == "mykey"  # preserved
+    assert env["ANTHROPIC_API_KEY"] == ""  # placeholder added
+    assert env["OPENROUTER_API_KEY"] == ""
+
+
+def test_init_backs_up_legacy_config_yaml(tmp_path, monkeypatch):
+    monkeypatch.setenv("EMISSARY_ROUTER_HOME", str(tmp_path))
+    monkeypatch.delenv("EMISSARY_ROUTER_CONFIG", raising=False)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.yaml").write_text("models: {}\n")  # old yaml
+
+    assert _cmd_init(argparse.Namespace(no_prompt=True)) == 0
+    assert not (tmp_path / "config.yaml").exists()
+    assert (tmp_path / "config.yaml.bak").exists()
+    assert (tmp_path / "config.json").exists()
+    assert user_config_path() == tmp_path / "config.json"
+
+
+def test_init_via_main_entry(tmp_path, monkeypatch):
+    monkeypatch.setenv("EMISSARY_ROUTER_HOME", str(tmp_path))
+    monkeypatch.delenv("EMISSARY_ROUTER_CONFIG", raising=False)
+    monkeypatch.chdir(tmp_path)
+    from emissary_router.cli import main
+
+    assert main(["init", "--no-prompt"]) == 0
+    assert user_config_path().exists()
+    assert user_env_path().exists()

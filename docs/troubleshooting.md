@@ -20,7 +20,7 @@ lists exactly which keys are missing under `missing_env`.
 ## "unknown models" or "default model must be enabled" on load
 
 You can only use models in the built-in catalog, and `default` must be enabled. Run
-`er models` to see valid names and current toggles, then fix `config.yaml`.
+`er models` to see valid names and current toggles, then fix `config.json`.
 
 ## Changed a key but nothing changed
 
@@ -47,9 +47,8 @@ er restart
 
 ## Port already in use
 
-```yaml
-server:
-  port: 8790
+```json
+"server": { "port": 8790 }
 ```
 
 Then `er restart`.
@@ -74,10 +73,8 @@ er stop
 
 Binding to a non-loopback host requires an auth key (validation enforces it):
 
-```yaml
-server:
-  host: 0.0.0.0
-  auth_key: choose-a-local-router-key
+```json
+"server": { "host": "0.0.0.0", "auth_key": "choose-a-local-router-key" }
 ```
 
 `er code` then passes that key to Claude Code automatically. Prefer an SSH tunnel

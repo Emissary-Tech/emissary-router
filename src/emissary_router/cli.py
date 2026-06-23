@@ -20,7 +20,6 @@ from emissary_router.config import (
     user_env_path,
     write_env_file,
 )
-from emissary_router.defaults import ENV_TEMPLATE
 from emissary_router.launch import exec_claude, ensure_gateway, gateway_status, stop_gateway
 
 
@@ -34,9 +33,14 @@ def _mask(value: str) -> str:
 
 
 def _cmd_init(args: argparse.Namespace) -> int:
+    print(f"Emissary Router setup -> {emissary_router_home()}")
+    legacy_yaml = emissary_router_home() / "config.yaml"
+    if legacy_yaml.exists():
+        backup = legacy_yaml.parent / "config.yaml.bak"
+        legacy_yaml.rename(backup)
+        print(f"  config.yaml is no longer used; backed up to {backup.name}, using config.json")
     created = ensure_user_config()
     config_path = user_config_path()
-    print(f"Emissary Router setup -> {emissary_router_home()}")
     if created:
         print(f"  created {config_path.name}")
 
@@ -48,15 +52,19 @@ def _cmd_init(args: argparse.Namespace) -> int:
 
     interactive = sys.stdin.isatty() and not args.no_prompt
     if not interactive:
-        if not env_path.exists():
-            env_path.parent.mkdir(parents=True, exist_ok=True)
-            env_path.write_text(ENV_TEMPLATE)
-            try:
-                env_path.chmod(0o600)
-            except OSError:
-                pass
+        values = dict(existing)
+        added = False
+        for key in required:
+            if key not in values and key not in shell_env:
+                values[key] = ""  # placeholder for the user to fill in
+                added = True
+        if added or not env_path.exists():
+            write_env_file(env_path, values)
             print(f"  wrote {env_path}")
-        print("Add your keys to the .env above (or export them), then run: er code")
+        missing = [k for k in required if not values.get(k) and k not in shell_env]
+        if missing:
+            print("Set these keys (edit the .env above or export them): " + ", ".join(missing))
+        print("Then run: er code")
         return 0
 
     values = dict(existing)

@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from emissary_router.catalog import CATALOG, PROVIDER_ENV, ROUTER_API_KEY_ENV, ProviderName
 
@@ -21,7 +21,7 @@ def user_config_path() -> Path:
     configured = os.environ.get("EMISSARY_ROUTER_CONFIG")
     if configured:
         return Path(configured).expanduser()
-    return emissary_router_home() / "config.yaml"
+    return emissary_router_home() / "config.json"
 
 
 def user_env_path() -> Path:
@@ -43,13 +43,9 @@ def ensure_user_config() -> bool:
     return True
 
 
-def read_env_file(path: Path) -> dict[str, str]:
-    """Parse a .env file into a dict without mutating os.environ."""
-    values: dict[str, str] = {}
-    try:
-        text = path.read_text()
-    except FileNotFoundError:
-        return values
+def _parse_env_lines(text: str) -> "list[tuple[str, str]]":
+    """Parse `.env` text into (key, value) pairs. Shared by the reader and loader."""
+    pairs: list[tuple[str, str]] = []
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
@@ -61,14 +57,33 @@ def read_env_file(path: Path) -> dict[str, str]:
         key, value = line.split("=", 1)
         key = key.strip()
         if key:
-            values[key] = _strip_env_quotes(value.strip())
-    return values
+            pairs.append((key, _strip_env_quotes(value.strip())))
+    return pairs
+
+
+def read_env_file(path: Path) -> dict[str, str]:
+    """Parse a .env file into a dict without mutating os.environ."""
+    try:
+        text = path.read_text()
+    except FileNotFoundError:
+        return {}
+    return dict(_parse_env_lines(text))
+
+
+def _format_env_value(value: str) -> str:
+    if "\n" in value or "\r" in value:
+        raise ValueError("environment value must not contain a newline")
+    if value == value.strip() and not any(ch in value for ch in " \t\"'"):
+        return value
+    if '"' in value:
+        raise ValueError("environment value must not contain a double-quote")
+    return f'"{value}"'
 
 
 def write_env_file(path: Path, values: dict[str, str]) -> None:
     """Write key=value lines and restrict permissions (the file holds secrets)."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    body = "".join(f"{key}={value}\n" for key, value in values.items())
+    body = "".join(f"{key}={_format_env_value(value)}\n" for key, value in values.items())
     path.write_text(body)
     try:
         path.chmod(0o600)
@@ -88,19 +103,9 @@ def _load_env_file(path: Path) -> None:
         text = path.read_text()
     except FileNotFoundError:
         return
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[len("export "):].strip()
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        if not key or key in os.environ:
-            continue
-        os.environ[key] = _strip_env_quotes(value.strip())
+    for key, value in _parse_env_lines(text):
+        if key not in os.environ:
+            os.environ[key] = value
 
 
 def _strip_env_quotes(value: str) -> str:
@@ -158,9 +163,19 @@ class ResolvedModel(BaseModel):
     model_id: str
 
 
+class ModelEntry(BaseModel):
+    """Per-model config. `model_id` is owned by the catalog and never set here."""
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    provider: ProviderName | None = None
+
+
 class RouterConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    # `url` is an internal endpoint: it has a default and can be overridden, but is
+    # intentionally not shown in the shipped config. `router_model` is user-facing.
     url: str = DEFAULT_CLASSIFICATION_URL
     router_model: str = "emissary-model-router-shared"
     timeout_seconds: float = 30
@@ -178,26 +193,42 @@ class TelemetryConfig(BaseModel):
 class AppConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    # Each value is: false (off), true (on, recommended provider), or a provider
-    # name (on, that provider). Provider must be one the model supports.
-    models: dict[str, bool | ProviderName]
+    # Per model: an object {enabled, provider}. Shorthands are accepted and coerced:
+    # true/false -> {enabled: ...}; a provider name -> {provider: ...}.
+    models: dict[str, ModelEntry]
     default: str
     confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+    policy: Literal["deviate_if_confident"] = "deviate_if_confident"
     router: RouterConfig = Field(default_factory=RouterConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
+
+    @field_validator("models", mode="before")
+    @classmethod
+    def _coerce_model_entries(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        coerced: dict[str, Any] = {}
+        for name, entry in value.items():
+            if isinstance(entry, bool):
+                coerced[name] = {"enabled": entry}
+            elif isinstance(entry, str):
+                coerced[name] = {"provider": entry}
+            else:
+                coerced[name] = entry
+        return coerced
 
     @model_validator(mode="after")
     def validate_catalog_references(self) -> "AppConfig":
         unknown_models = sorted(set(self.models) - set(CATALOG))
         if unknown_models:
             raise ValueError(f"unknown models: {unknown_models}")
-        for name, value in self.models.items():
-            if isinstance(value, str):
+        for name, entry in self.models.items():
+            if entry.provider is not None:
                 supported = CATALOG[name].providers
-                if value not in supported:
+                if entry.provider not in supported:
                     raise ValueError(
-                        f"provider '{value}' is not available for {name}; "
+                        f"provider '{entry.provider}' is not available for {name}; "
                         f"supported: {sorted(supported)}"
                     )
         if self.default not in CATALOG:
@@ -207,13 +238,12 @@ class AppConfig(BaseModel):
         return self
 
     def enabled_models(self) -> list[str]:
-        # Truthy values (true or a provider name) are enabled; false is off.
-        return [name for name in CATALOG if self.models.get(name, False)]
+        return [name for name in CATALOG if name in self.models and self.models[name].enabled]
 
     def resolve_model(self, name: str) -> ResolvedModel:
         spec = CATALOG[name]
-        value = self.models.get(name)
-        provider = value if isinstance(value, str) else spec.default_provider
+        entry = self.models.get(name)
+        provider = entry.provider if entry and entry.provider else spec.default_provider
         return ResolvedModel(name=spec.name, provider=provider, model_id=spec.providers[provider])
 
     def required_provider_env(self) -> dict[ProviderName, str]:

@@ -69,7 +69,7 @@ See [troubleshooting](troubleshooting.md).
 ## Environment overrides
 
 ```bash
-export EMISSARY_ROUTER_HOME=/path/to/dir       # parent of config.yaml, .env, logs, pid
-export EMISSARY_ROUTER_CONFIG=/path/to/config.yaml
+export EMISSARY_ROUTER_HOME=/path/to/dir       # parent of config.json, .env, logs, pid
+export EMISSARY_ROUTER_CONFIG=/path/to/config.json
 export CLAUDE_COMMAND=/path/to/claude
 ```

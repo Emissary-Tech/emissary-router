@@ -97,11 +97,45 @@ def test_router_config_defaults_classification_endpoint() -> None:
     assert config.router.router_model == "emissary-model-router-shared"
 
 
-def test_default_user_path_uses_emissary_router_home(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("EMISSARY_ROUTER_HOME", "/tmp/emissary-router-test")
+def test_default_user_path_is_always_config_json(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("EMISSARY_ROUTER_HOME", str(home))
     monkeypatch.delenv("EMISSARY_ROUTER_CONFIG", raising=False)
 
-    assert user_config_path().as_posix() == "/tmp/emissary-router-test/config.yaml"
+    assert user_config_path() == home / "config.json"
+
+    # A legacy config.yaml is ignored; config.json is still the default.
+    home.mkdir(parents=True)
+    (home / "config.yaml").write_text("{}")
+    assert user_config_path() == home / "config.json"
+
+
+def test_nested_model_entry_and_shorthands() -> None:
+    config = _config(
+        models={
+            "claude-sonnet-4.6": {"enabled": True, "provider": "openrouter"},  # nested
+            "claude-haiku-4.5": True,  # bool shorthand
+            "gemini-3.1-flash-lite": "openrouter",  # provider-string shorthand
+        }
+    )
+    assert config.resolve_model("claude-sonnet-4.6").provider == "openrouter"
+    assert config.resolve_model("claude-haiku-4.5").provider == "anthropic"  # default
+    assert config.enabled_models() == [
+        "gemini-3.1-flash-lite",
+        "claude-haiku-4.5",
+        "claude-sonnet-4.6",
+    ]
+
+
+def test_nested_entry_disabled() -> None:
+    config = _config(
+        models={
+            "claude-sonnet-4.6": {"enabled": True},
+            "claude-haiku-4.5": {"enabled": False},
+            "gemini-3.1-flash-lite": True,
+        }
+    )
+    assert "claude-haiku-4.5" not in config.enabled_models()
 
 
 def test_server_auth_key_allows_non_loopback_binding() -> None:
@@ -125,6 +159,12 @@ def test_confidence_must_be_probability() -> None:
         _config(confidence=1.5)
 
 
+def test_policy_defaults_and_rejects_unknown() -> None:
+    assert _config().policy == "deviate_if_confident"
+    with pytest.raises(ValidationError):
+        _config(policy="argmax")
+
+
 def test_env_loader_does_not_override_existing_values(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text("A=from-file\nB='quoted value'\n")
@@ -135,6 +175,18 @@ def test_env_loader_does_not_override_existing_values(tmp_path, monkeypatch: pyt
 
     assert os.environ["A"] == "already-set"
     assert os.environ["B"] == "quoted value"
+
+
+def test_write_env_file_round_trips_and_rejects_newline(tmp_path) -> None:
+    from emissary_router.config import read_env_file, write_env_file
+
+    path = tmp_path / ".env"
+    write_env_file(path, {"A": "plain-key", "B": "has space", "C": ""})
+    assert read_env_file(path) == {"A": "plain-key", "B": "has space", "C": ""}
+    assert oct(path.stat().st_mode)[-3:] == "600"
+
+    with pytest.raises(ValueError):
+        write_env_file(path, {"X": "line1\nline2"})
 
 
 def test_missing_runtime_env_reports_router_and_enabled_provider_keys(

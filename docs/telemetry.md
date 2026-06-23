@@ -41,13 +41,12 @@ Example:
 `retention_days` and `max_events` keep the file bounded. The log is pruned in place
 (rewritten) periodically as new rows are written.
 
-```yaml
-telemetry:
-  enabled: true
-  log_path: ~/.emissary-router/events.jsonl   # optional override
-  retention_days: 30                           # drop rows older than this; null = keep all
-  max_events: 50000                            # keep newest N; null = no cap
+```json
+"telemetry": { "enabled": true, "retention_days": 30, "max_events": 50000 }
 ```
+
+`retention_days` drops rows older than N days (`null` = keep all); `max_events` keeps
+the newest N (`null` = no cap). `log_path` is an optional override for the JSONL path.
 
 Set `enabled: false` to turn telemetry off entirely.
 
