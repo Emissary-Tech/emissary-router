@@ -61,19 +61,15 @@ class RouterPipeline:
 
         # When the router classifier is unreachable (retries already exhausted in
         # ClassifierClient) or returns an unparseable response, fall back to the
+        # ClassifierClient) or returns an unusable response, fall back to the
         # configured default model rather than failing the request.
         try:
             probabilities = await self._classifier.predict(classifier_input)
         except (httpx.HTTPError, KeyError, IndexError, ValueError, TypeError) as exc:
-            logger.warning("classifier failed; routing to default model: %s", exc)
-            decision = self._default_decision(reason="fallback: router_issue")
+            decision = self._default_decision(reason="router_issue")
         else:
             missing_labels = self._missing_probability_labels(probabilities)
             if missing_labels:
-                self._record_failure(
-                    request_id, started_at, body, session_id, call_kind,
-                    "(routing error)", 502,
-                )
                 return JSONResponse(
                     {
                         "error": {
@@ -84,7 +80,8 @@ class RouterPipeline:
                     },
                     status_code=502,
                 )
-            decision = choose_model(self._config, probabilities)
+            else:
+                decision = choose_model(self._config, probabilities)
         model = self._config.resolve_model(decision.model_name)
         provider = self._providers[model.provider]
 
@@ -121,43 +118,13 @@ class RouterPipeline:
             on_complete=on_complete,
         )
 
-    def _default_decision(self, reason: str) -> RouteDecision:
+    def _default_decision(
+        self, reason: str
+    ) -> RouteDecision:
         return RouteDecision(
             model_name=self._config.default,
             reason=reason,
             probabilities={},
-        )
-
-    def _record_failure(
-        self,
-        request_id: str,
-        started_at: float,
-        body: dict,
-        session_id: str | None,
-        call_kind: str,
-        served_model: str,
-        http_status: int | None,
-    ) -> None:
-        self._write(
-            EventRecord(
-                id=request_id,
-                ts=time.time(),
-                session_id=session_id,
-                call_kind=call_kind,
-                requested_model=body.get("model"),
-                served_model=served_model,
-                provider="-",
-                model_id="-",
-                route_reason="error",
-                input_tokens=0,
-                output_tokens=0,
-                cache_read_tokens=0,
-                cache_creation_tokens=0,
-                cost_usd=None,
-                duration_ms=round((time.time() - started_at) * 1000, 3),
-                http_status=http_status,
-                raw_event=None,
-            )
         )
 
     def _missing_probability_labels(self, probabilities: dict[str, float]) -> list[str]:
