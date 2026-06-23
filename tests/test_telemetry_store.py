@@ -136,3 +136,31 @@ def test_latest_real_user_text_skips_tool_results():
     ]
     assert latest_real_user_text(loop) == "fix the bug"
     assert latest_real_user_text([{"role": "user", "content": [{"type": "text", "text": "hi"}]}]) == "hi"
+
+
+def test_latest_real_user_text_ignores_system_reminders():
+    def reminder(text):
+        return {"role": "user", "content": [{"type": "text", "text": f"<system-reminder>\n{text}\n</system-reminder>"}]}
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "<system-reminder>\ntools available\n</system-reminder>"},
+                {"type": "text", "text": "review the code in this directory"},
+            ],
+        },
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "1", "name": "Read", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "1", "content": "x"}]},
+        reminder("tools haven't been used recently"),  # injected mid-loop, evolving text
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "2", "name": "Read", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "2", "content": "y"}]},
+    ]
+    # anchor is the real prompt, not the injected reminder
+    assert latest_real_user_text(messages) == "review the code in this directory"
+
+    # so the whole agent loop stays one turn even as reminders are injected
+    tracker = TurnTracker(store=None)
+    first = tracker.turn_id("s", latest_real_user_text(messages[:3]))
+    after_reminder = tracker.turn_id("s", latest_real_user_text(messages))
+    assert first == after_reminder == 1

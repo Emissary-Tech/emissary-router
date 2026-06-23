@@ -51,11 +51,17 @@ def call_kind_from_body(body: dict[str, Any]) -> str:
     return "background"
 
 
-def latest_real_user_text(messages: Any) -> str | None:
-    """The most recent real user text input, skipping tool_result continuations.
+def _is_system_reminder(text: str) -> bool:
+    return text.lstrip().startswith("<system-reminder>")
 
-    During an agent loop the trailing user message is a tool_result; the real input
-    is the latest user message that contains text. Stable across one turn's calls.
+
+def latest_real_user_text(messages: Any) -> str | None:
+    """The most recent genuine user input, used as the per-turn anchor.
+
+    Skips tool_result continuations AND ``<system-reminder>`` blocks, which Claude Code
+    injects mid-conversation as user text. Those reminders evolve over a session, so
+    anchoring on them would split one user input into many turns. We anchor only on the
+    real prompt text, which stays stable across an agent loop and changes per new input.
     """
     if not isinstance(messages, list):
         return None
@@ -64,12 +70,16 @@ def latest_real_user_text(messages: Any) -> str | None:
             continue
         content = message.get("content")
         if isinstance(content, str):
-            return content
+            if content.strip() and not _is_system_reminder(content):
+                return content
+            continue
         if isinstance(content, list):
             texts = [
                 block.get("text", "")
                 for block in content
-                if isinstance(block, dict) and block.get("type") == "text"
+                if isinstance(block, dict)
+                and block.get("type") == "text"
+                and not _is_system_reminder(block.get("text", ""))
             ]
             if texts:
                 return "\n".join(texts)
