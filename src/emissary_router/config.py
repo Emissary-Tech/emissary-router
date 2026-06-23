@@ -185,6 +185,8 @@ class RouterConfig(BaseModel):
     url: str = DEFAULT_CLASSIFICATION_URL
     router_model: str = "emissary-model-router-shared"
     timeout_seconds: float = 30
+    max_retries: int = Field(default=5, ge=0)
+    retry_backoff_seconds: float = Field(default=0.5, ge=0.0)
 
 
 class TelemetryConfig(BaseModel):
