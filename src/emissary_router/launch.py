@@ -44,17 +44,17 @@ def dashboard_url(config: AppConfig) -> str | None:
 
 
 def announce_dashboard(config: AppConfig, status: "GatewayStatus", open_browser: bool) -> None:
-    """Print the dashboard URL and open it only when the gateway was just started.
+    """Print the dashboard URL and open it in the browser while the gateway is up.
 
-    Opening only on a cold start keeps repeated ``code``/``start`` calls from spawning a
-    new browser tab every time, while still surfacing the URL so it can be reopened by
-    hand (just visit the address).
+    Opens on every ``code``/``start`` (not just a cold start) so the dashboard is always
+    one step away. Browsers focus the existing tab for the same URL, so this does not
+    pile up tabs. Use ``--no-open`` to suppress. The URL is always printed either way.
     """
     url = dashboard_url(config)
     if not url:
         return
     print(f"Dashboard: {url}")
-    if open_browser and status.message == "started":
+    if open_browser and status.healthy:
         try:
             webbrowser.open(url)
         except Exception:
@@ -139,13 +139,30 @@ def stop_gateway() -> GatewayStatus:
         return GatewayStatus(False, "", pid, "stale pid file removed")
 
     os.kill(pid, signal.SIGTERM)
-    deadline = time.time() + 10
+    if _wait_for_exit(pid, 10):
+        _remove_pid_file()
+        return GatewayStatus(False, "", pid, "stopped")
+
+    # SIGTERM ignored (hung worker / stuck stream) — escalate so a later start/restart
+    # is not blocked by a zombie holding the port and pid file.
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        _remove_pid_file()
+        return GatewayStatus(False, "", pid, "stopped")
+    if _wait_for_exit(pid, 5):
+        _remove_pid_file()
+        return GatewayStatus(False, "", pid, "killed")
+    return GatewayStatus(False, "", pid, "still running after SIGKILL")
+
+
+def _wait_for_exit(pid: int, timeout: float) -> bool:
+    deadline = time.time() + timeout
     while time.time() < deadline:
         if not _process_running(pid):
-            _remove_pid_file()
-            return GatewayStatus(False, "", pid, "stopped")
+            return True
         time.sleep(0.2)
-    return GatewayStatus(False, "", pid, "still running after SIGTERM")
+    return not _process_running(pid)
 
 
 def exec_claude(

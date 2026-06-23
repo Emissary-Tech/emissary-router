@@ -197,13 +197,13 @@ def _cmd_start(args: argparse.Namespace) -> int:
     _warn_missing_env(config)
     status = ensure_gateway(config, config_path)
     print(json.dumps(status.__dict__, indent=2))
-    announce_dashboard(config, status, open_browser=not args.no_open)
+    announce_dashboard(config, status, open_browser=not getattr(args, "no_open", False))
     return 0 if status.healthy else 1
 
 
 def _cmd_restart(args: argparse.Namespace) -> int:
     stopped = stop_gateway()
-    if stopped.message == "still running after SIGTERM":
+    if stopped.message == "still running after SIGKILL":
         print(json.dumps(stopped.__dict__, indent=2))
         return 1
     return _cmd_start(args)
@@ -223,7 +223,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
 def _cmd_stop(_: argparse.Namespace) -> int:
     status = stop_gateway()
     print(json.dumps(status.__dict__, indent=2))
-    return 0 if status.message in {"stopped", "stale pid file removed", "no pid file"} else 1
+    return 0 if status.message in {"stopped", "killed", "stale pid file removed", "no pid file"} else 1
 
 
 def _set_config_env(config: str | None) -> None:
@@ -257,6 +257,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     restart = sub.add_parser("restart", help="Restart the background gateway")
     restart.add_argument("--config", default=None)
+    restart.add_argument("--no-open", action="store_true", help="Do not open the dashboard in a browser")
     restart.set_defaults(func=_cmd_restart)
 
     debug = sub.add_parser("debug", help="Run the gateway in the foreground for debugging")
@@ -283,7 +284,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except RuntimeError as exc:
+        print(f"er: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

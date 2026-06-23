@@ -25,13 +25,16 @@ def create_app() -> FastAPI:
     )
     turns = TurnTracker(store)
     app = FastAPI(title="Emissary Router")
+    app.state.config = config
     app.state.pipeline = RouterPipeline(config, store=store, turns=turns)
 
     def reload_config() -> None:
         # Rebuild the pipeline from the saved config so dashboard edits apply without
         # a restart. Routing (enabled models, default, confidence, provider) is taken
         # from the new pipeline; in-flight requests keep the one they already read.
-        app.state.pipeline = RouterPipeline(load_config(config_path), store=store, turns=turns)
+        new_config = load_config(config_path)
+        app.state.config = new_config
+        app.state.pipeline = RouterPipeline(new_config, store=store, turns=turns)
 
     if store is not None:
         app.include_router(
@@ -46,10 +49,10 @@ def create_app() -> FastAPI:
         )
 
     @app.get("/")
-    async def health() -> dict:
+    async def health(request: Request) -> dict:
         return {
             "ok": True,
-            "default": config.default,
+            "default": request.app.state.config.default,
             "policy": "deviate_if_confident",
         }
 
