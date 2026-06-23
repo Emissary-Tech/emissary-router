@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS events (
     cache_creation_tokens INTEGER,
     cost_usd REAL,
     duration_ms REAL,
+    http_status INTEGER,
     raw_event TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_events_session_turn ON events (session_id, turn_id);
@@ -58,6 +59,9 @@ class SqliteStore:
         with self._connect() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(_SCHEMA)
+            existing = {row[1] for row in conn.execute("PRAGMA table_info(events)")}
+            if "http_status" not in existing:
+                conn.execute("ALTER TABLE events ADD COLUMN http_status INTEGER")
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._path, timeout=5.0)

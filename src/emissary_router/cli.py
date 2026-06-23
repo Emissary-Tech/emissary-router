@@ -143,12 +143,26 @@ def _load_config_or_hint(config_path: Path):
         return None
 
 
+def _warn_missing_env(config) -> None:
+    # Only the providers actually used by enabled models are required, so an
+    # OpenRouter-only setup will not ask for an Anthropic key.
+    missing = missing_runtime_env(config)
+    if missing:
+        print(
+            "Warning: missing API keys for enabled models: " + ", ".join(missing)
+            + " — requests will fail until these are set (.env or environment; "
+            "run `er validate-config` to check).",
+            file=sys.stderr,
+        )
+
+
 def _cmd_code(args: argparse.Namespace) -> int:
     _set_config_env(args.config)
     config_path = (Path(args.config) if args.config else user_config_path()).expanduser().resolve()
     config = _load_config_or_hint(config_path)
     if config is None:
         return 1
+    _warn_missing_env(config)
     claude_args = list(args.claude_args)
     if claude_args and claude_args[0] == "--":
         claude_args = claude_args[1:]
@@ -180,6 +194,7 @@ def _cmd_start(args: argparse.Namespace) -> int:
     config = _load_config_or_hint(config_path)
     if config is None:
         return 1
+    _warn_missing_env(config)
     status = ensure_gateway(config, config_path)
     print(json.dumps(status.__dict__, indent=2))
     announce_dashboard(config, status, open_browser=not args.no_open)
@@ -237,7 +252,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     start = sub.add_parser("start", help="Start the local gateway in the background")
     start.add_argument("--config", default=None)
-    start.add_argument("--pricing", default=None)
     start.add_argument("--no-open", action="store_true", help="Do not open the dashboard in a browser")
     start.set_defaults(func=_cmd_start)
 

@@ -192,11 +192,8 @@ class TelemetryConfig(BaseModel):
 
     enabled: bool = True
     db_path: str = "~/.emissary-router/events.sqlite3"
-    include_classifier_input: bool = False
-    include_raw_event: bool = False
-    retention_days: int | None = 30
-    max_events: int | None = 50000
-    baseline_model: str = "claude-sonnet-4.6"
+    retention_days: int | None = Field(default=30, ge=0)
+    max_events: int | None = Field(default=50000, ge=0)
 
 
 class AppConfig(BaseModel):

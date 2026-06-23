@@ -31,6 +31,7 @@ class EventRecord:
     cache_creation_tokens: int
     cost_usd: float | None
     duration_ms: float
+    http_status: int | None = None
     raw_event: str | None = None
 
 

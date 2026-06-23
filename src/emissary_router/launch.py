@@ -156,7 +156,7 @@ def exec_claude(
     dry_run: bool = False,
     open_dashboard: bool = True,
 ) -> int:
-    status = ensure_gateway(config, config_path, pricing_path)
+    status = ensure_gateway(config, config_path)
     if not dry_run:
         announce_dashboard(config, status, open_browser=open_dashboard)
     env = os.environ.copy()

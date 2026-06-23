@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json
+import os
 import time
 import uuid
 
@@ -30,16 +30,12 @@ class RouterPipeline:
     def __init__(
         self,
         config: AppConfig,
-        pricing: PricingConfig,
         store: SqliteStore | None = None,
         turns: TurnTracker | None = None,
     ):
         self._config = config
         self._classifier = ClassifierClient(config.router)
-        self._providers = {
-            name: build_provider(name, provider_config)
-            for name, provider_config in config.providers.items()
-        }
+        self._providers = self._build_providers()
         self._store = store
         self._turns = turns or TurnTracker(store)
 
@@ -51,10 +47,7 @@ class RouterPipeline:
         return {
             name: build_provider(
                 name,
-                ProviderConfig(
-                    type=name,
-                    api_key=os.environ.get(PROVIDER_ENV[name]),
-                ),
+                ProviderConfig(type=name, api_key=os.environ.get(PROVIDER_ENV[name])),
             )
             for name in provider_names
         }
@@ -62,10 +55,31 @@ class RouterPipeline:
     async def handle_messages(self, body: dict, headers: dict[str, str]) -> Response:
         request_id = str(uuid.uuid4())
         started_at = time.time()
+        session_id = _header(headers, SESSION_HEADER)
+        call_kind = call_kind_from_body(body)
+        turn_id = self._turns.turn_id(
+            session_id, latest_real_user_text(body.get("messages")), call_kind
+        )
         classifier_input, classifier_input_metadata = request_to_classifier_input(body)
-        probabilities = await self._classifier.predict(classifier_input)
+
+        try:
+            probabilities = await self._classifier.predict(classifier_input)
+        except Exception as exc:  # classifier unreachable / unauthorized
+            self._record_failure(
+                request_id, started_at, body, session_id, turn_id, call_kind,
+                "(classifier error)", _status_from_exc(exc),
+            )
+            return JSONResponse(
+                {"error": {"type": "classifier_error", "message": str(exc)[:300]}},
+                status_code=502,
+            )
+
         missing_labels = self._missing_probability_labels(probabilities)
         if missing_labels:
+            self._record_failure(
+                request_id, started_at, body, session_id, turn_id, call_kind,
+                "(routing error)", 502,
+            )
             return JSONResponse(
                 {
                     "error": {
@@ -76,15 +90,10 @@ class RouterPipeline:
                 },
                 status_code=502,
             )
+
         decision = choose_model(self._config, probabilities)
         model = self._config.resolve_model(decision.model_name)
         provider = self._providers[model.provider]
-
-        session_id = _header(headers, SESSION_HEADER)
-        call_kind = call_kind_from_body(body)
-        turn_id = self._turns.turn_id(
-            session_id, latest_real_user_text(body.get("messages")), call_kind
-        )
 
         context = RequestContext(
             request_id=request_id,
@@ -94,7 +103,6 @@ class RouterPipeline:
         )
 
         def on_complete(usage: Usage, provider_metadata: dict) -> None:
-            tokens = usage_tokens(usage)
             record = EventRecord(
                 id=request_id,
                 ts=time.time(),
@@ -108,10 +116,9 @@ class RouterPipeline:
                 route_reason=decision.reason,
                 cost_usd=self._cost_usd(decision.model_name, usage),
                 duration_ms=round((time.time() - started_at) * 1000, 3),
-                raw_event=self._raw_event(
-                    decision, classifier_input, classifier_input_metadata, provider_metadata
-                ),
-                **tokens,
+                http_status=_int_or_none(provider_metadata.get("http_status")),
+                raw_event=None,
+                **usage_tokens(usage),
             )
             self._write(record)
 
@@ -122,28 +129,39 @@ class RouterPipeline:
             on_complete=on_complete,
         )
 
-    def _raw_event(
+    def _record_failure(
         self,
-        decision,
-        classifier_input: str,
-        classifier_input_metadata: dict,
-        provider_metadata: dict,
-    ) -> str | None:
-        if not self._config.telemetry.include_raw_event:
-            return None
-        payload = {
-            "probabilities": decision.probabilities,
-            "classifier_input": {
-                **classifier_input_metadata,
-                **(
-                    {"text": classifier_input}
-                    if self._config.telemetry.include_classifier_input
-                    else {}
-                ),
-            },
-            "provider_metadata": provider_metadata,
-        }
-        return json.dumps(payload, ensure_ascii=False)
+        request_id: str,
+        started_at: float,
+        body: dict,
+        session_id: str | None,
+        turn_id: int,
+        call_kind: str,
+        served_model: str,
+        http_status: int | None,
+    ) -> None:
+        self._write(
+            EventRecord(
+                id=request_id,
+                ts=time.time(),
+                session_id=session_id,
+                turn_id=turn_id,
+                call_kind=call_kind,
+                requested_model=body.get("model"),
+                served_model=served_model,
+                provider="-",
+                model_id="-",
+                route_reason="error",
+                input_tokens=0,
+                output_tokens=0,
+                cache_read_tokens=0,
+                cache_creation_tokens=0,
+                cost_usd=None,
+                duration_ms=round((time.time() - started_at) * 1000, 3),
+                http_status=http_status,
+                raw_event=None,
+            )
+        )
 
     def _missing_probability_labels(self, probabilities: dict[str, float]) -> list[str]:
         expected = set(self._config.enabled_models())
@@ -167,6 +185,15 @@ def _header(headers: dict[str, str], name: str) -> str | None:
         if key.lower() == name:
             return value
     return None
+
+
+def _status_from_exc(exc: Exception) -> int | None:
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return int(status) if isinstance(status, int) else 502
+
+
+def _int_or_none(value: object) -> int | None:
+    return int(value) if isinstance(value, int) else None
 
 
 def _cost_usd(price: TokenPricing, usage: Usage) -> float:
