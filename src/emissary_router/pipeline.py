@@ -6,12 +6,13 @@ from pathlib import Path
 import time
 import uuid
 
+import httpx
 from starlette.responses import JSONResponse, Response
 
 from emissary_router.caching.usage import Usage
 from emissary_router.catalog import CATALOG, PROVIDER_ENV, TokenPricing
 from emissary_router.config import AppConfig, ProviderConfig
-from emissary_router.schemas import AnthropicRequest, RequestContext
+from emissary_router.schemas import AnthropicRequest, RequestContext, RouteDecision
 from emissary_router.providers.registry import build_provider
 from emissary_router.routing.classifier import ClassifierClient
 from emissary_router.routing.policy import choose_model
@@ -54,20 +55,29 @@ class RouterPipeline:
         request_id = str(uuid.uuid4())
         started_at = time.time()
         classifier_input, classifier_input_metadata = request_to_classifier_input(body)
-        probabilities = await self._classifier.predict(classifier_input)
-        missing_labels = self._missing_probability_labels(probabilities)
-        if missing_labels:
-            return JSONResponse(
-                {
-                    "error": {
-                        "type": "classifier_label_mismatch",
-                        "message": "classifier response is missing labels required by config",
-                        "missing_labels": missing_labels,
-                    }
-                },
-                status_code=502,
-            )
-        decision = choose_model(self._config, probabilities)
+
+        # When the router classifier is unreachable (retries already exhausted in
+        # ClassifierClient) or returns an unusable response, fall back to the
+        # configured default model rather than failing the request.
+        try:
+            probabilities = await self._classifier.predict(classifier_input)
+        except (httpx.HTTPError, KeyError, IndexError, ValueError, TypeError) as exc:
+            decision = self._default_decision(reason="router_issue")
+        else:
+            missing_labels = self._missing_probability_labels(probabilities)
+            if missing_labels:
+                return JSONResponse(
+                    {
+                        "error": {
+                            "type": "classifier_label_mismatch",
+                            "message": "classifier response is missing labels required by config",
+                            "missing_labels": missing_labels,
+                        }
+                    },
+                    status_code=502,
+                )
+            else:
+                decision = choose_model(self._config, probabilities)
         model = self._config.resolve_model(decision.model_name)
         provider = self._providers[model.provider]
         context = RequestContext(
@@ -107,6 +117,15 @@ class RouterPipeline:
             model=model,
             context=context,
             on_complete=on_complete,
+        )
+
+    def _default_decision(
+        self, reason: str
+    ) -> RouteDecision:
+        return RouteDecision(
+            model_name=self._config.default,
+            reason=reason,
+            probabilities={},
         )
 
     def _missing_probability_labels(self, probabilities: dict[str, float]) -> list[str]:
