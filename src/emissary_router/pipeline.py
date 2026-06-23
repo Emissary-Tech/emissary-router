@@ -62,7 +62,7 @@ class RouterPipeline:
         try:
             probabilities = await self._classifier.predict(classifier_input)
         except (httpx.HTTPError, KeyError, IndexError, ValueError, TypeError) as exc:
-            decision = self._default_decision(reason="router_issue")
+            decision = self._default_decision(reason="fallback: router_issue")
         else:
             missing_labels = self._missing_probability_labels(probabilities)
             if missing_labels:
