@@ -131,16 +131,19 @@ private/staging deployment.
 ```
 
 Binding to a non-loopback host (e.g. `0.0.0.0`) without `auth_key` fails validation.
-When `auth_key` is set, `er code` passes it to Claude Code automatically.
+When `auth_key` is set, `er code` passes it to Claude Code automatically, and the
+[dashboard](dashboard.md) requires the same key.
 
 ### `telemetry`
 
 ```json
-"telemetry": { "enabled": true, "retention_days": 30, "max_events": 50000 }
+"telemetry": { "enabled": true, "db_path": "~/.emissary-router/events.sqlite3",
+               "retention_days": 30, "max_events": 50000 }
 ```
 
-See [telemetry](telemetry.md). `retention_days`/`max_events` accept `null` to keep
-everything.
+See [telemetry](telemetry.md). `db_path` overrides the SQLite location;
+`retention_days`/`max_events` accept `null` to keep everything. Disabling telemetry
+also disables the [dashboard](dashboard.md).
 
 ## Routing
 

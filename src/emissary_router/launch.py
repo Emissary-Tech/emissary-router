@@ -6,7 +6,9 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,6 +32,33 @@ def gateway_url(config: AppConfig) -> str:
     if ":" in host and not host.startswith("["):
         host = f"[{host}]"
     return f"http://{host}:{config.server.port}"
+
+
+def dashboard_url(config: AppConfig) -> str | None:
+    if not config.telemetry.enabled:
+        return None
+    url = gateway_url(config) + "/dashboard"
+    if config.server.auth_key:
+        url += "?key=" + urllib.parse.quote(config.server.auth_key)
+    return url
+
+
+def announce_dashboard(config: AppConfig, status: "GatewayStatus", open_browser: bool) -> None:
+    """Print the dashboard URL and open it in the browser while the gateway is up.
+
+    Opens on every ``code``/``start`` (not just a cold start) so the dashboard is always
+    one step away. Browsers focus the existing tab for the same URL, so this does not
+    pile up tabs. Use ``--no-open`` to suppress. The URL is always printed either way.
+    """
+    url = dashboard_url(config)
+    if not url:
+        return
+    print(f"Dashboard: {url}")
+    if open_browser and status.healthy:
+        try:
+            webbrowser.open(url)
+        except Exception:
+            pass
 
 
 @dataclass(frozen=True)
@@ -110,13 +139,30 @@ def stop_gateway() -> GatewayStatus:
         return GatewayStatus(False, "", pid, "stale pid file removed")
 
     os.kill(pid, signal.SIGTERM)
-    deadline = time.time() + 10
+    if _wait_for_exit(pid, 10):
+        _remove_pid_file()
+        return GatewayStatus(False, "", pid, "stopped")
+
+    # SIGTERM ignored (hung worker / stuck stream) — escalate so a later start/restart
+    # is not blocked by a zombie holding the port and pid file.
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        _remove_pid_file()
+        return GatewayStatus(False, "", pid, "stopped")
+    if _wait_for_exit(pid, 5):
+        _remove_pid_file()
+        return GatewayStatus(False, "", pid, "killed")
+    return GatewayStatus(False, "", pid, "still running after SIGKILL")
+
+
+def _wait_for_exit(pid: int, timeout: float) -> bool:
+    deadline = time.time() + timeout
     while time.time() < deadline:
         if not _process_running(pid):
-            _remove_pid_file()
-            return GatewayStatus(False, "", pid, "stopped")
+            return True
         time.sleep(0.2)
-    return GatewayStatus(False, "", pid, "still running after SIGTERM")
+    return not _process_running(pid)
 
 
 def exec_claude(
@@ -125,8 +171,11 @@ def exec_claude(
     claude_command: str,
     claude_args: list[str],
     dry_run: bool = False,
+    open_dashboard: bool = True,
 ) -> int:
     status = ensure_gateway(config, config_path)
+    if not dry_run:
+        announce_dashboard(config, status, open_browser=open_dashboard)
     env = os.environ.copy()
     env["EMISSARY_ROUTER_CONFIG"] = str(config_path)
     env["ANTHROPIC_BASE_URL"] = status.url
