@@ -22,18 +22,11 @@ Then set up config and API keys:
 er init
 ```
 
-The installer performs an editable install and creates default files in one place:
-
-```text
-~/.emissary-router/
-  config.yaml
-  pricing.yaml
-  events.sqlite3
-  server.log
-  server.pid
-```
-
-Then edit:
+`er init` creates `~/.emissary-router/config.json` and prompts for your keys (it skips
+any already in your environment), writing them to `~/.emissary-router/.env`. At any
+prompt press Enter to skip that key and set it later — or, when re-running, to keep the
+current value. Run it again any time to change a key. You can also just export the keys
+instead:
 
 ```bash
 export EMISSARY_ROUTER_API_KEY=...
@@ -42,7 +35,7 @@ export OPENROUTER_API_KEY=...
 ```
 
 Don't have an `EMISSARY_ROUTER_API_KEY` yet? Sign up at
-[withemissary.com](https://withemissary.com) and create one. See
+[withemissary.com](https://withemissary.com) and create one (Dashboard > Settings > Credentials). See
 [API keys](docs/configuration.md#api-keys) for where each provider key comes from — you
 only need the ones your enabled models use.
 
