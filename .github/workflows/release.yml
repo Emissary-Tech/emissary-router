@@ -1,0 +1,60 @@
+name: Release to PyPI
+
+# Publishes a new release to PyPI when a version tag (vX.Y.Z) is pushed.
+# Uses PyPI Trusted Publishing (OIDC) — no API tokens required.
+# See https://docs.pypi.org/trusted-publishers/ for one-time setup on PyPI.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    name: Build distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Verify tag matches package version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(uv version --short)"
+          echo "tag=$TAG package=$PKG"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::Git tag ($TAG) does not match pyproject version ($PKG)"
+            exit 1
+          fi
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/emissary-router/
+    permissions:
+      id-token: write  # required for trusted publishing (OIDC)
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
