@@ -137,9 +137,17 @@ def build_dashboard_router(
         return JSONResponse({"saved": True, "restart_required": on_config_change is None})
 
     @router.get("/api/events")
-    async def events(limit: int = 200, session: str | None = None) -> JSONResponse:
+    async def events(
+        limit: int = 200, offset: int = 0, session: str | None = None
+    ) -> JSONResponse:
         limit = max(1, min(limit, 1000))
-        return JSONResponse({"events": store.list_events(limit=limit, session_id=session)})
+        offset = max(0, offset)
+        return JSONResponse(
+            {
+                "events": store.list_events(limit=limit, offset=offset, session_id=session),
+                "total": store.total_events(session_id=session),
+            }
+        )
 
     @router.get("/api/summary")
     async def summary() -> JSONResponse:
@@ -151,9 +159,15 @@ def build_dashboard_router(
         return JSONResponse(data)
 
     @router.get("/api/sessions")
-    async def sessions(limit: int = 200) -> JSONResponse:
+    async def sessions(limit: int = 200, offset: int = 0) -> JSONResponse:
         limit = max(1, min(limit, 1000))
-        return JSONResponse({"sessions": store.sessions(limit=limit)})
+        offset = max(0, offset)
+        return JSONResponse(
+            {
+                "sessions": store.sessions(limit=limit, offset=offset),
+                "total": store.total_sessions(),
+            }
+        )
 
     @router.delete("/api/events/{event_id}")
     async def delete_event(event_id: str) -> JSONResponse:
