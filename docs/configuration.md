@@ -69,11 +69,11 @@ Each model is reachable through one or more providers. Omitting `provider` uses 
 recommended one. This is a transport choice — the model (and routing) is the same;
 only how the request is delivered changes.
 
-| Model | Providers (recommended first) |
-|---|---|
-| `claude-sonnet-4.6` | `anthropic`, `openrouter` |
-| `claude-haiku-4.5` | `anthropic`, `openrouter` |
-| `gemini-3.1-flash-lite` | `openrouter` |
+| Model                   | Providers (recommended first) |
+| ----------------------- | ----------------------------- |
+| `claude-sonnet-4.6`     | `anthropic`, `openrouter`     |
+| `claude-haiku-4.5`      | `anthropic`, `openrouter`     |
+| `gemini-3.1-flash-lite` | `openrouter`                  |
 
 Common reasons to override: you only hold one provider's key, or you want to
 consolidate billing. For example, if you only have an OpenRouter key, route the Claude
@@ -167,7 +167,7 @@ OPENROUTER_API_KEY=...
 Where to get each key:
 
 - `EMISSARY_ROUTER_API_KEY` — the Emissary classifier key that powers routing. Sign up
-  at https://withemissary.com and create one.
+  at https://withemissary.com and create one (Dashboard > Settings > Credentials).
 - `ANTHROPIC_API_KEY` — the [Anthropic Console](https://console.anthropic.com/settings/keys),
   for models served directly by Anthropic.
 - `OPENROUTER_API_KEY` — [OpenRouter](https://openrouter.ai/keys), for models served via
@@ -177,8 +177,9 @@ Where to get each key:
 
 The easiest way to set them is `er init`, which prompts for each key (skipping any
 already in your environment) and writes them to `~/.emissary-router/.env` with `chmod
-600`. Only the keys for providers you actually use are required. Check with
-`er validate-config`.
+600`. At any prompt, press Enter to skip a key and set it later (or, when re-running, to
+keep the current value). Only the keys for providers you actually use are required —
+`er init` won't ask for the rest. Check with `er validate-config`.
 
 Precedence: variables already exported in your shell win; then
 `~/.emissary-router/.env`; then a `.env` in the current directory. The loader never
