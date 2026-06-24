@@ -83,14 +83,17 @@ class SqliteStore:
             self.prune()
 
     # --- read ----------------------------------------------------------------
-    def list_events(self, limit: int = 200, session_id: str | None = None) -> list[dict[str, Any]]:
+    def list_events(
+        self, limit: int = 200, offset: int = 0, session_id: str | None = None
+    ) -> list[dict[str, Any]]:
         query = "SELECT * FROM events"
         params: list[Any] = []
         if session_id:
             query += " WHERE session_id = ?"
             params.append(session_id)
-        query += " ORDER BY ts DESC LIMIT ?"
+        query += " ORDER BY ts DESC LIMIT ? OFFSET ?"
         params.append(limit)
+        params.append(offset)
         with self._connect() as conn:
             rows = conn.execute(query, params).fetchall()
         return [_public_row(row) for row in rows]
@@ -112,11 +115,22 @@ class SqliteStore:
             rows = conn.execute(query).fetchall()
         return [dict(row) for row in rows]
 
-    def total_events(self) -> int:
+    def total_events(self, session_id: str | None = None) -> int:
+        query = "SELECT COUNT(*) FROM events"
+        params: list[Any] = []
+        if session_id:
+            query += " WHERE session_id = ?"
+            params.append(session_id)
         with self._connect() as conn:
-            return int(conn.execute("SELECT COUNT(*) FROM events").fetchone()[0])
+            return int(conn.execute(query, params).fetchone()[0])
 
-    def sessions(self, limit: int = 200) -> list[dict[str, Any]]:
+    def total_sessions(self) -> int:
+        with self._connect() as conn:
+            return int(
+                conn.execute("SELECT COUNT(DISTINCT session_id) FROM events").fetchone()[0]
+            )
+
+    def sessions(self, limit: int = 200, offset: int = 0) -> list[dict[str, Any]]:
         """Group calls by Claude Code session, with per-model breakdown."""
         query = """
             SELECT session_id, served_model, call_kind,
@@ -157,7 +171,7 @@ class SqliteStore:
             session["models"][row["served_model"]] = session["models"].get(row["served_model"], 0) + row["n"]
 
         ordered = sorted(sessions.values(), key=lambda s: s["last_ts"], reverse=True)
-        return ordered[:limit]
+        return ordered[offset : offset + limit]
 
     # --- delete --------------------------------------------------------------
     def delete_event(self, event_id: str) -> int:

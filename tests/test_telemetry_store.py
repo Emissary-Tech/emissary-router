@@ -63,6 +63,28 @@ def test_sessions_group_by_session(tmp_path):
     assert "last_ts" in s1
 
 
+def test_list_events_pagination(tmp_path):
+    store = SqliteStore(tmp_path / "e.sqlite3")
+    for i in range(5):
+        store.write(_rec(f"e{i}", ts=float(i)))  # ascending ts -> e4 newest
+    page1 = store.list_events(limit=2, offset=0)
+    page2 = store.list_events(limit=2, offset=2)
+    assert [r["id"] for r in page1] == ["e4", "e3"]
+    assert [r["id"] for r in page2] == ["e2", "e1"]
+    assert store.total_events() == 5
+
+
+def test_sessions_pagination(tmp_path):
+    store = SqliteStore(tmp_path / "e.sqlite3")
+    for i in range(5):
+        store.write(_rec(f"e{i}", session_id=f"s{i}", ts=float(i)))  # s4 most recent
+    assert store.total_sessions() == 5
+    page1 = store.sessions(limit=2, offset=0)
+    page2 = store.sessions(limit=2, offset=2)
+    assert [s["session_id"] for s in page1] == ["s4", "s3"]
+    assert [s["session_id"] for s in page2] == ["s2", "s1"]
+
+
 def test_prune_by_retention_and_max(tmp_path):
     store = SqliteStore(tmp_path / "e.sqlite3", retention_days=1, max_events=2)
     old = time.time() - 5 * 86400

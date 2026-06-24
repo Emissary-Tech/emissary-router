@@ -36,6 +36,8 @@ _PAGE = """<!doctype html>
   button.iconbtn { background:none; border:1px solid var(--line); color:var(--muted); border-radius:8px; cursor:pointer; padding:5px 12px; font:inherit; }
   button.iconbtn:hover { color:var(--fg); border-color:var(--accent); }
   .note { color:var(--muted); font-size:12px; margin-top:8px; }
+  .pager { display:flex; align-items:center; gap:14px; margin-top:14px; font-size:12px; }
+  button.iconbtn:disabled { opacity:0.4; cursor:default; border-color:var(--line); color:var(--muted); }
   .empty { color:var(--muted); padding:40px; text-align:center; }
   select, input[type=number] { background:#0f1115; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font:inherit; }
   input[type=checkbox] { width:16px; height:16px; accent-color:var(--accent); }
@@ -77,6 +79,29 @@ async function api(path, opts = {}) {
   return r.json();
 }
 
+const PAGE_SIZE = 20;
+const reqState = { page: 0 };
+const sesState = { page: 0 };
+
+function pagerHtml(total, page, size) {
+  const pages = Math.max(1, Math.ceil(total / size));
+  const start = total ? page * size + 1 : 0;
+  const end = Math.min(total, (page + 1) * size);
+  return `<div class="pager">
+    <button class="iconbtn" data-pg="prev" ${page <= 0 ? "disabled" : ""}>← Prev</button>
+    <span class="muted">${start}–${end} of ${total} · page ${page + 1}/${pages}</span>
+    <button class="iconbtn" data-pg="next" ${page >= pages - 1 ? "disabled" : ""}>Next →</button>
+  </div>`;
+}
+
+function wirePager(container, state, render) {
+  container.querySelectorAll("button[data-pg]").forEach(b => b.onclick = () => {
+    if (b.disabled) return;
+    state.page += b.dataset.pg === "next" ? 1 : -1;
+    render();
+  });
+}
+
 async function renderSavings() {
   const s = await api("/api/summary");
   const saved = s.baseline_available
@@ -100,8 +125,9 @@ async function renderSavings() {
 }
 
 async function renderRequests() {
-  const { events } = await api("/api/events?limit=300");
-  if (!events.length) { $("requests").innerHTML = '<div class="empty">No requests yet.</div>'; return; }
+  const { events, total } = await api(`/api/events?limit=${PAGE_SIZE}&offset=${reqState.page * PAGE_SIZE}`);
+  if (!events.length && reqState.page > 0) { reqState.page--; return renderRequests(); }
+  if (!events.length) { reqState.page = 0; $("requests").innerHTML = '<div class="empty">No requests yet.</div>'; return; }
   const st = (e) => {
     if (e.http_status == null) return '<td class="muted">-</td>';
     const bad = e.http_status >= 400;
@@ -123,7 +149,9 @@ async function renderRequests() {
   $("requests").innerHTML = `
     <table><thead><tr><th>Time</th><th>Served</th><th>Status</th><th>Requested</th><th>Provider</th><th>Kind</th>
       <th>Cost</th><th>Cached</th><th>Prompt/Out tok</th><th class="actcol"></th></tr></thead><tbody>${rows}</tbody></table>
+    ${pagerHtml(total, reqState.page, PAGE_SIZE)}
     <div class="note">Prompt = full input incl. cached tokens (matches the provider's view); Cached shows the read/written cache.</div>`;
+  wirePager($("requests"), reqState, renderRequests);
   $("requests").querySelectorAll("button.del").forEach(b => b.onclick = async () => {
     await api("/api/events/" + encodeURIComponent(b.dataset.id), { method: "DELETE" });
     renderRequests(); renderSavings();
@@ -131,8 +159,9 @@ async function renderRequests() {
 }
 
 async function renderSessions() {
-  const { sessions } = await api("/api/sessions?limit=300");
-  if (!sessions.length) { $("sessions").innerHTML = '<div class="empty">No sessions yet.</div>'; return; }
+  const { sessions, total } = await api(`/api/sessions?limit=${PAGE_SIZE}&offset=${sesState.page * PAGE_SIZE}`);
+  if (!sessions.length && sesState.page > 0) { sesState.page--; return renderSessions(); }
+  if (!sessions.length) { sesState.page = 0; $("sessions").innerHTML = '<div class="empty">No sessions yet.</div>'; return; }
   const rows = sessions.map(s => {
     const models = Object.entries(s.models).map(([m, n]) => `<span class="pill">${esc(m)}×${n}</span>`).join(" ");
     return `<tr>
@@ -147,7 +176,9 @@ async function renderSessions() {
   $("sessions").innerHTML = `
     <table><thead><tr><th>Last activity</th><th>Session</th><th>Calls</th><th>Models</th><th>Cost</th><th class="actcol"></th></tr></thead>
       <tbody>${rows}</tbody></table>
+    ${pagerHtml(total, sesState.page, PAGE_SIZE)}
     <div class="note">Each row is one Claude Code session — all of its calls grouped together.</div>`;
+  wirePager($("sessions"), sesState, renderSessions);
   $("sessions").querySelectorAll("button.del").forEach(b => b.onclick = async () => {
     if (!b.dataset.session) return;
     await api("/api/sessions/" + encodeURIComponent(b.dataset.session), { method: "DELETE" });
