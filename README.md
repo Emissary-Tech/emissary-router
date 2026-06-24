@@ -41,6 +41,11 @@ export ANTHROPIC_API_KEY=...
 export OPENROUTER_API_KEY=...
 ```
 
+Don't have an `EMISSARY_ROUTER_API_KEY` yet? Sign up at
+[withemissary.com](https://withemissary.com) and create one. See
+[API keys](docs/configuration.md#api-keys) for where each provider key comes from — you
+only need the ones your enabled models use.
+
 Then run Claude Code through the router:
 
 ```bash

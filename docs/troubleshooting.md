@@ -34,6 +34,22 @@ have `ANTHROPIC_API_KEY` exported elsewhere, that value wins. Precedence: shell 
 `~/.emissary-router/.env` → `./.env`. Unset the stale shell variable, or put the
 right value there.
 
+## Claude Code warns "Both claude.ai and ANTHROPIC_API_KEY set"
+
+Expected and harmless when you run `er code` while also signed in to a claude.ai
+(Pro/Max) session. `er code` points Claude Code at the local gateway via
+`ANTHROPIC_BASE_URL` and authenticates with the router key, so the API-key path is used
+and requests still route correctly through Emissary Router — Claude Code is just noting
+that two auth sources are present.
+
+It can't be suppressed from the router's side: Claude Code shows this whenever any
+environment auth source (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, …) coexists with a
+claude.ai session. To silence it, sign out of the subscription session:
+
+```bash
+claude /logout
+```
+
 ## Gateway didn't become healthy
 
 `er code`/`er start` waits for the gateway and then errors with a pointer to the log.

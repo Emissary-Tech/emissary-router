@@ -164,6 +164,17 @@ ANTHROPIC_API_KEY=...
 OPENROUTER_API_KEY=...
 ```
 
+Where to get each key:
+
+- `EMISSARY_ROUTER_API_KEY` — the Emissary classifier key that powers routing. Sign up
+  at https://withemissary.com and create one.
+- `ANTHROPIC_API_KEY` — the [Anthropic Console](https://console.anthropic.com/settings/keys),
+  for models served directly by Anthropic.
+- `OPENROUTER_API_KEY` — [OpenRouter](https://openrouter.ai/keys), for models served via
+  OpenRouter.
+- `GOOGLE_API_KEY` — [Google AI Studio](https://aistudio.google.com/apikey), only if you
+  serve Gemini natively through the `google` provider.
+
 The easiest way to set them is `er init`, which prompts for each key (skipping any
 already in your environment) and writes them to `~/.emissary-router/.env` with `chmod
 600`. Only the keys for providers you actually use are required. Check with
