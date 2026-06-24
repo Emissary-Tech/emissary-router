@@ -10,8 +10,7 @@ cost/cache telemetry.
 pip install emissary-router
 ```
 
-With uv: `uv pip install emissary-router`. Before the package is published, install
-from git: `pip install "git+<repo-url>"`.
+With uv: `uv pip install emissary-router`.
 
 This installs the `er` command. If a global install is blocked (an
 "externally-managed environment"), install inside a virtualenv — or use an isolated
