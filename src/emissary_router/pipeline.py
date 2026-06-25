@@ -39,6 +39,7 @@ class RouterPipeline:
         self._config = config
         self._classifier = ClassifierClient(config.router)
         self._providers = self._build_providers()
+        self._cache_ledger = CacheLedger()
         self._store = store
 
     def _build_providers(self):
@@ -60,6 +61,9 @@ class RouterPipeline:
         session_id = _header(headers, SESSION_HEADER)
         call_kind = call_kind_from_body(body)
         classifier_input, classifier_input_metadata = request_to_classifier_input(body)
+        cost_features = extract_request_cost_features(
+            body, headers, self._cache_ledger.expected_output_tokens()
+        )
 
         # When the router classifier is unreachable (retries already exhausted in
         # ClassifierClient) or returns an unparseable response, fall back to the
@@ -86,7 +90,12 @@ class RouterPipeline:
                     },
                     status_code=502,
                 )
-            decision = choose_model(self._config, probabilities)
+            decision = choose_model(
+                self._config,
+                probabilities,
+                cost_features=cost_features,
+                cache_ledger=self._cache_ledger,
+            )
         model = self._config.resolve_model(decision.model_name)
         provider = self._providers[model.provider]
 
@@ -98,6 +107,9 @@ class RouterPipeline:
         )
 
         def on_complete(usage: Usage, provider_metadata: dict) -> None:
+            self._cache_ledger.observe(
+                model, cost_features, usage, is_main=(call_kind == "main")
+            )
             record = EventRecord(
                 id=request_id,
                 ts=time.time(),

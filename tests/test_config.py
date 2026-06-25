@@ -185,8 +185,8 @@ def test_confidence_must_be_probability() -> None:
 
 
 def test_policy_defaults_and_rejects_unknown() -> None:
-    assert _config().policy == "cache_aware"
-    assert _config(policy="deviate_if_confident").policy == "deviate_if_confident"
+    assert _config().policy == "deviate_if_confident"
+    assert _config(policy="cache_aware").policy == "cache_aware"
     with pytest.raises(ValidationError):
         _config(policy="argmax")
 

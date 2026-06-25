@@ -25,7 +25,7 @@ This is the full shipped config. Everything not shown uses defaults.
   },
   "default": "claude-sonnet-4.6",
   "confidence": 0.8,
-  "policy": "cache_aware",
+  "policy": "deviate_if_confident",
   "router": { "router_model": "emissary-model-router-shared" },
   "server": { "port": 8788 },
   "telemetry": { "enabled": true, "retention_days": 30, "max_events": 50000 }
@@ -110,10 +110,18 @@ conservative (stays on `default` more often). See [routing](#routing).
 
 The routing policy. Supported values:
 
-- `cache_aware` (default) — use classifier confidence first, then compare estimated
-  cost after prompt-cache effects.
-- `deviate_if_confident` — simpler policy: scan enabled models cheap → expensive and
-  pick the first whose probability is `>= confidence`; otherwise use `default`.
+- `deviate_if_confident` (default) — scan enabled models cheap → expensive and pick
+  the first whose probability is `>= confidence`; otherwise use `default`.
+- `cache_aware` — apply the same confidence gate, then compare each candidate's
+  estimated cost *after* prompt-cache effects, and deviate only when switching is
+  cheaper once the cost of losing a warm cache is counted.
+
+Consider `cache_aware` for long Claude Code sessions. Switching the served model
+discards the provider's prompt cache, so naive per-request routing can re-pay full
+input on every turn and end up costing *more* than never deviating at all.
+`cache_aware` prices that in and stays on a warm model unless a cheaper one clearly
+wins. It is opt-in because it depends on an in-process cache ledger — see the caveat
+under [Routing](#routing).
 
 ### `router`
 
@@ -149,14 +157,25 @@ also disables the [dashboard](dashboard.md).
 
 ## Routing
 
-The default policy is `cache_aware`: stay on `default` unless a cheaper enabled model
-passes the classifier confidence gate and is still cheaper after estimated cache
-read/write costs.
+The default policy is `deviate_if_confident`: scan enabled models cheap → expensive,
+and use the first model whose classifier probability is `>= confidence`. If none
+qualify, use `default`.
+
+`cache_aware` is opt-in. It uses the same confidence gate, then compares estimated
+cost after prompt-cache read/write effects:
 
 - No non-default model meets `confidence` → `default`.
 - A cheaper model meets `confidence`, but switching would lose an expensive warm cache
   → `default`.
 - A cheaper model meets `confidence` and wins after cache-adjusted cost → that model.
+
+The cache ledger backing `cache_aware` lives in memory in the gateway process; it is
+not shared or persisted, and resets on restart. The default `er start` / `er code`
+launch runs a single process, which is what `cache_aware` expects — running multiple
+workers would give each its own ledger and weaken cache awareness. Anthropic cache
+behavior is tracked directly (`predictable`); OpenRouter/Gemini caching is implicit, so
+the router treats it as best-effort and only credits it after observing a real cache
+read (see [providers and caching](providers-caching.md)).
 
 ## API keys
 

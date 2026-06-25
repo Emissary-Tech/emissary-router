@@ -14,7 +14,7 @@ CONFIG_TEMPLATE = """{
   },
   "default": "claude-sonnet-4.6",
   "confidence": 0.8,
-  "policy": "cache_aware",
+  "policy": "deviate_if_confident",
   "router": { "router_model": "emissary-model-router-shared" },
   "server": { "port": 8788 },
   "telemetry": { "enabled": true, "retention_days": 30, "max_events": 50000 }

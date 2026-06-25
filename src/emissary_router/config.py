@@ -206,7 +206,7 @@ class AppConfig(BaseModel):
     models: dict[str, ModelEntry]
     default: str
     confidence: float = Field(default=0.8, ge=0.0, le=1.0)
-    policy: Literal["deviate_if_confident", "cache_aware"] = "cache_aware"
+    policy: Literal["deviate_if_confident", "cache_aware"] = "deviate_if_confident"
     router: RouterConfig = Field(default_factory=RouterConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)

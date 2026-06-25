@@ -10,7 +10,6 @@ from emissary_router.catalog import CATALOG, TokenPricing
 from emissary_router.config import AppConfig
 
 
-MIN_SAVINGS_RATIO = 0.05
 DEFAULT_EXPECTED_OUTPUT_TOKENS = 1024
 CCH_ATTRIBUTION_LINE_RE = re.compile(r"(?m)^.*\bcch=[^\s<>\"]+.*(?:\n|$)")
 
@@ -55,7 +54,11 @@ class EstimatedCost:
         return data
 
 
-def extract_request_cost_features(body: dict[str, Any], headers: dict[str, str]) -> RequestCostFeatures:
+def extract_request_cost_features(
+    body: dict[str, Any],
+    headers: dict[str, str],
+    expected_output_tokens: int | None = None,
+) -> RequestCostFeatures:
     session_id = _header(headers, "x-claude-code-session-id")
     prefix_material = _stable_json(
         {
@@ -79,7 +82,7 @@ def extract_request_cost_features(body: dict[str, Any], headers: dict[str, str])
         estimated_input_tokens=input_tokens,
         estimated_cacheable_prefix_tokens=cacheable_prefix_tokens,
         estimated_fresh_input_tokens=fresh_input_tokens,
-        expected_output_tokens=_expected_output_tokens(body),
+        expected_output_tokens=_expected_output_tokens(body, expected_output_tokens),
     )
 
 
@@ -94,11 +97,11 @@ def estimate_cost(
     price = CATALOG[model_name].pricing
 
     if prediction.warm:
-        cached_tokens = min(
-            prediction.cached_tokens,
-            features.estimated_cacheable_prefix_tokens,
-            features.estimated_input_tokens,
-        )
+        # Credit the cache the provider actually reported (system + tools + most of the
+        # conversation history), bounded only by this request's total input. Clamping to
+        # estimated_cacheable_prefix_tokens here would re-price the cached history at full
+        # input rate and defeat the whole point of cache-aware routing.
+        cached_tokens = min(prediction.cached_tokens, features.estimated_input_tokens)
         input_tokens = max(features.estimated_input_tokens - cached_tokens, 0)
         cache_read_tokens = cached_tokens
         cache_write_tokens = 0
@@ -124,10 +127,8 @@ def estimate_cost(
     )
 
 
-def is_meaningfully_cheaper(candidate: EstimatedCost, baseline: EstimatedCost) -> bool:
-    if baseline.total_usd <= 0:
-        return candidate.total_usd < baseline.total_usd
-    return candidate.total_usd <= baseline.total_usd * (1.0 - MIN_SAVINGS_RATIO)
+def is_cheaper(candidate: EstimatedCost, baseline: EstimatedCost) -> bool:
+    return candidate.total_usd < baseline.total_usd
 
 
 def _cost_usd(
@@ -174,9 +175,20 @@ def _estimate_tokens(text: str) -> int:
     return max(1, (len(text) + 3) // 4)
 
 
-def _expected_output_tokens(body: dict[str, Any]) -> int:
+def _expected_output_tokens(body: dict[str, Any], rolling: int | None = None) -> int:
+    """Expected output for cost estimation.
+
+    Bounded above by the request's ``max_tokens`` (output can't exceed it), but driven
+    by ``rolling`` — a rolling estimate of recently observed outputs — rather than a
+    hard 1024 cap. The old cap understated output and skewed comparison between models
+    whose output prices differ widely; ``max_tokens`` alone overstates it (real outputs
+    are far below the 32k ceiling Claude Code sends), so we take the lesser of the two.
+    """
     try:
         max_tokens = int(body.get("max_tokens") or DEFAULT_EXPECTED_OUTPUT_TOKENS)
     except (TypeError, ValueError):
         max_tokens = DEFAULT_EXPECTED_OUTPUT_TOKENS
-    return max(1, min(max_tokens, DEFAULT_EXPECTED_OUTPUT_TOKENS))
+    if max_tokens <= 0:
+        max_tokens = DEFAULT_EXPECTED_OUTPUT_TOKENS
+    estimate = rolling if rolling and rolling > 0 else DEFAULT_EXPECTED_OUTPUT_TOKENS
+    return max(1, min(max_tokens, estimate))

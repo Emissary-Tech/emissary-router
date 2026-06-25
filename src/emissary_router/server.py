@@ -51,7 +51,7 @@ def create_app() -> FastAPI:
         return {
             "ok": True,
             "default": request.app.state.config.default,
-            "policy": "deviate_if_confident",
+            "policy": request.app.state.config.policy,
         }
 
     @app.post("/v1/messages")

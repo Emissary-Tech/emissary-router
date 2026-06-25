@@ -4,7 +4,7 @@ from emissary_router.config import AppConfig
 from emissary_router.routing.cache_cost import (
     RequestCostFeatures,
     estimate_cost,
-    is_meaningfully_cheaper,
+    is_cheaper,
 )
 from emissary_router.schemas import RouteDecision
 
@@ -65,20 +65,29 @@ def _cache_aware(
     }
     baseline = estimates[config.default]
     best = min(estimates.values(), key=lambda estimate: estimate.total_usd)
+    estimated_costs = {name: cost.to_dict() for name, cost in estimates.items()}
 
-    if best.model_name != config.default and is_meaningfully_cheaper(best, baseline):
+    if best.model_name != config.default and is_cheaper(best, baseline):
         return RouteDecision(
             model_name=best.model_name,
-            reason=f"cache_aware:p>={config.confidence}:cheaper_after_cache",
+            reason="cache_aware:candidate_cheaper",
             probabilities=probabilities,
-            estimated_costs={name: cost.to_dict() for name, cost in estimates.items()},
+            estimated_costs=estimated_costs,
             cache_prediction=best.cache_prediction.to_dict(),
         )
 
+    # Stayed on default. Distinguish *why* so the cause is visible in telemetry:
+    #   no_confident_candidate — no non-default model cleared `confidence`
+    #   warm_default_cheaper   — a confident candidate existed but default won after cache
+    stayed_reason = (
+        "cache_aware:no_confident_candidate"
+        if len(eligible) == 1
+        else "cache_aware:warm_default_cheaper"
+    )
     return RouteDecision(
         model_name=config.default,
-        reason="cache_aware:default_after_cache",
+        reason=stayed_reason,
         probabilities=probabilities,
-        estimated_costs={name: cost.to_dict() for name, cost in estimates.items()},
+        estimated_costs=estimated_costs,
         cache_prediction=baseline.cache_prediction.to_dict(),
     )
