@@ -54,8 +54,10 @@ Shorthands are also accepted: `true`/`false` means `{ "enabled": ... }`, and a b
 provider name means `{ "provider": ... }`. So `"claude-haiku-4.5": false` disables it
 and `"claude-haiku-4.5": "openrouter"` enables it on OpenRouter.
 
-Run `er models` to see the catalog, which entries are enabled, and each model's
-supported providers. Catalog order is cheap → expensive, and routing relies on it:
+Run `er models` to see the catalog, which entries are enabled, each model's supported
+providers, and its `cost_score`. Routing scans enabled models cheapest-first, where
+"cheapest" is **derived from each model's price** (not the catalog's listing order), so
+reordering the catalog can't change routing. Cheapest → most expensive today:
 
 1. `gemini-3.1-flash-lite`
 2. `claude-haiku-4.5`
@@ -67,11 +69,11 @@ Each model is reachable through one or more providers. Omitting `provider` uses 
 recommended one. This is a transport choice — the model (and routing) is the same;
 only how the request is delivered changes.
 
-| Model | Providers (recommended first) |
-|---|---|
-| `claude-sonnet-4.6` | `anthropic`, `openrouter` |
-| `claude-haiku-4.5` | `anthropic`, `openrouter` |
-| `gemini-3.1-flash-lite` | `openrouter` |
+| Model                   | Providers (recommended first) |
+| ----------------------- | ----------------------------- |
+| `claude-sonnet-4.6`     | `anthropic`, `openrouter`     |
+| `claude-haiku-4.5`      | `anthropic`, `openrouter`     |
+| `gemini-3.1-flash-lite` | `openrouter`                  |
 
 Common reasons to override: you only hold one provider's key, or you want to
 consolidate billing. For example, if you only have an OpenRouter key, route the Claude
@@ -131,16 +133,19 @@ private/staging deployment.
 ```
 
 Binding to a non-loopback host (e.g. `0.0.0.0`) without `auth_key` fails validation.
-When `auth_key` is set, `er code` passes it to Claude Code automatically.
+When `auth_key` is set, `er code` passes it to Claude Code automatically, and the
+[dashboard](dashboard.md) requires the same key.
 
 ### `telemetry`
 
 ```json
-"telemetry": { "enabled": true, "retention_days": 30, "max_events": 50000 }
+"telemetry": { "enabled": true, "db_path": "~/.emissary-router/events.sqlite3",
+               "retention_days": 30, "max_events": 50000 }
 ```
 
-See [telemetry](telemetry.md). `retention_days`/`max_events` accept `null` to keep
-everything.
+See [telemetry](telemetry.md). `db_path` overrides the SQLite location;
+`retention_days`/`max_events` accept `null` to keep everything. Disabling telemetry
+also disables the [dashboard](dashboard.md).
 
 ## Routing
 
@@ -164,10 +169,22 @@ ANTHROPIC_API_KEY=...
 OPENROUTER_API_KEY=...
 ```
 
+Where to get each key:
+
+- `EMISSARY_ROUTER_API_KEY` — the Emissary classifier key that powers routing. Sign up
+  at https://withemissary.com and create one (Dashboard > Settings > Credentials).
+- `ANTHROPIC_API_KEY` — the [Anthropic Console](https://console.anthropic.com/settings/keys),
+  for models served directly by Anthropic.
+- `OPENROUTER_API_KEY` — [OpenRouter](https://openrouter.ai/keys), for models served via
+  OpenRouter.
+- `GOOGLE_API_KEY` — [Google AI Studio](https://aistudio.google.com/apikey), only if you
+  serve Gemini natively through the `google` provider.
+
 The easiest way to set them is `er init`, which prompts for each key (skipping any
 already in your environment) and writes them to `~/.emissary-router/.env` with `chmod
-600`. Only the keys for providers you actually use are required. Check with
-`er validate-config`.
+600`. At any prompt, press Enter to skip a key and set it later (or, when re-running, to
+keep the current value). Only the keys for providers you actually use are required —
+`er init` won't ask for the rest. Check with `er validate-config`.
 
 Precedence: variables already exported in your shell win; then
 `~/.emissary-router/.env`; then a `.env` in the current directory. The loader never

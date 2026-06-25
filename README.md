@@ -10,8 +10,7 @@ cost/cache telemetry.
 pip install emissary-router
 ```
 
-With uv: `uv pip install emissary-router`. Before the package is published, install
-from git: `pip install "git+<repo-url>"`.
+With uv: `uv pip install emissary-router`.
 
 This installs the `er` command. If a global install is blocked (an
 "externally-managed environment"), install inside a virtualenv — or use an isolated
@@ -24,14 +23,21 @@ er init
 ```
 
 `er init` creates `~/.emissary-router/config.json` and prompts for your keys (it skips
-any already in your environment), writing them to `~/.emissary-router/.env`. Run it
-again any time to change a key. You can also just export the keys instead:
+any already in your environment), writing them to `~/.emissary-router/.env`. At any
+prompt press Enter to skip that key and set it later — or, when re-running, to keep the
+current value. Run it again any time to change a key. You can also just export the keys
+instead:
 
 ```bash
 export EMISSARY_ROUTER_API_KEY=...
 export ANTHROPIC_API_KEY=...
 export OPENROUTER_API_KEY=...
 ```
+
+Don't have an `EMISSARY_ROUTER_API_KEY` yet? Sign up at
+[withemissary.com](https://withemissary.com) and create one (Dashboard > Settings > Credentials). See
+[API keys](docs/configuration.md#api-keys) for where each provider key comes from — you
+only need the ones your enabled models use.
 
 Then run Claude Code through the router:
 
@@ -48,6 +54,18 @@ er stop
 
 Installing from a clone instead? Run `bash install.sh` (editable install), then
 `er init`.
+
+## Dashboard
+
+`er code` and `er start` open a local dashboard in your browser showing cost savings,
+recent requests, and per-session usage — plus a Settings tab to toggle models live:
+
+```text
+http://127.0.0.1:8788/dashboard
+```
+
+It stays up while the gateway runs, so reopen the URL any time. See
+[Dashboard](docs/dashboard.md).
 
 ## Supported Models
 
@@ -80,6 +98,7 @@ the built-in catalog. See [Configuration](docs/configuration.md) for details.
 
 - [Configuration](docs/configuration.md)
 - [Commands](docs/commands.md)
+- [Dashboard](docs/dashboard.md)
 - [Providers and Caching](docs/providers-caching.md)
 - [Pricing](docs/pricing.md)
 - [Thinking](docs/thinking.md)

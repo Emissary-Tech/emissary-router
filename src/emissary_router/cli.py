@@ -9,7 +9,7 @@ from pathlib import Path
 
 import uvicorn
 
-from emissary_router.catalog import CATALOG, ROUTER_API_KEY_ENV
+from emissary_router.catalog import CATALOG, ROUTER_API_KEY_ENV, cost_score
 from emissary_router.config import (
     emissary_router_home,
     ensure_user_config,
@@ -20,7 +20,14 @@ from emissary_router.config import (
     user_env_path,
     write_env_file,
 )
-from emissary_router.launch import exec_claude, ensure_gateway, gateway_status, stop_gateway
+from emissary_router.launch import (
+    announce_dashboard,
+    dashboard_url,
+    ensure_gateway,
+    exec_claude,
+    gateway_status,
+    stop_gateway,
+)
 
 
 def _cmd_config_path(_: argparse.Namespace) -> int:
@@ -89,8 +96,10 @@ def _cmd_init(args: argparse.Namespace) -> int:
 def _cmd_models(args: argparse.Namespace) -> int:
     config = load_config(Path(args.config) if args.config else None, strict_env=False)
     enabled = set(config.enabled_models())
+    # Cheapest first, derived from pricing (the order routing scans).
+    ordered = sorted(CATALOG.items(), key=lambda item: cost_score(item[1]))
     rows = []
-    for name, spec in CATALOG.items():
+    for name, spec in ordered:
         on = name in enabled
         resolved = config.resolve_model(name) if on else None
         rows.append(
@@ -101,6 +110,7 @@ def _cmd_models(args: argparse.Namespace) -> int:
                 "model_id": resolved.model_id if resolved else None,
                 "supported_providers": sorted(spec.providers),
                 "default_provider": spec.default_provider,
+                "cost_score": round(cost_score(spec), 4),
                 "default": name == config.default,
             }
         )
@@ -134,12 +144,26 @@ def _load_config_or_hint(config_path: Path):
         return None
 
 
+def _warn_missing_env(config) -> None:
+    # Only the providers actually used by enabled models are required, so an
+    # OpenRouter-only setup will not ask for an Anthropic key.
+    missing = missing_runtime_env(config)
+    if missing:
+        print(
+            "Warning: missing API keys for enabled models: " + ", ".join(missing)
+            + " — requests will fail until these are set (.env or environment; "
+            "run `er validate-config` to check).",
+            file=sys.stderr,
+        )
+
+
 def _cmd_code(args: argparse.Namespace) -> int:
     _set_config_env(args.config)
     config_path = (Path(args.config) if args.config else user_config_path()).expanduser().resolve()
     config = _load_config_or_hint(config_path)
     if config is None:
         return 1
+    _warn_missing_env(config)
     claude_args = list(args.claude_args)
     if claude_args and claude_args[0] == "--":
         claude_args = claude_args[1:]
@@ -149,6 +173,7 @@ def _cmd_code(args: argparse.Namespace) -> int:
         claude_command=args.claude_command,
         claude_args=claude_args,
         dry_run=args.dry_run,
+        open_dashboard=not args.no_open,
     )
 
 
@@ -170,14 +195,16 @@ def _cmd_start(args: argparse.Namespace) -> int:
     config = _load_config_or_hint(config_path)
     if config is None:
         return 1
+    _warn_missing_env(config)
     status = ensure_gateway(config, config_path)
     print(json.dumps(status.__dict__, indent=2))
+    announce_dashboard(config, status, open_browser=not getattr(args, "no_open", False))
     return 0 if status.healthy else 1
 
 
 def _cmd_restart(args: argparse.Namespace) -> int:
     stopped = stop_gateway()
-    if stopped.message == "still running after SIGTERM":
+    if stopped.message == "still running after SIGKILL":
         print(json.dumps(stopped.__dict__, indent=2))
         return 1
     return _cmd_start(args)
@@ -188,13 +215,16 @@ def _cmd_status(args: argparse.Namespace) -> int:
     config = load_config(Path(args.config) if args.config else None, strict_env=False)
     status = gateway_status(config)
     print(json.dumps(status.__dict__, indent=2))
+    url = dashboard_url(config)
+    if url:
+        print(f"Dashboard: {url}")
     return 0 if status.healthy else 1
 
 
 def _cmd_stop(_: argparse.Namespace) -> int:
     status = stop_gateway()
     print(json.dumps(status.__dict__, indent=2))
-    return 0 if status.message in {"stopped", "stale pid file removed", "no pid file"} else 1
+    return 0 if status.message in {"stopped", "killed", "stale pid file removed", "no pid file"} else 1
 
 
 def _set_config_env(config: str | None) -> None:
@@ -223,10 +253,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     start = sub.add_parser("start", help="Start the local gateway in the background")
     start.add_argument("--config", default=None)
+    start.add_argument("--no-open", action="store_true", help="Do not open the dashboard in a browser")
     start.set_defaults(func=_cmd_start)
 
     restart = sub.add_parser("restart", help="Restart the background gateway")
     restart.add_argument("--config", default=None)
+    restart.add_argument("--no-open", action="store_true", help="Do not open the dashboard in a browser")
     restart.set_defaults(func=_cmd_restart)
 
     debug = sub.add_parser("debug", help="Run the gateway in the foreground for debugging")
@@ -237,6 +269,7 @@ def build_parser() -> argparse.ArgumentParser:
     code.add_argument("--config", default=None)
     code.add_argument("--claude-command", default=os.environ.get("CLAUDE_COMMAND", "claude"))
     code.add_argument("--dry-run", action="store_true", help="Print launch command and env without exec")
+    code.add_argument("--no-open", action="store_true", help="Do not open the dashboard in a browser")
     code.add_argument("claude_args", nargs=argparse.REMAINDER)
     code.set_defaults(func=_cmd_code)
 
@@ -252,7 +285,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except RuntimeError as exc:
+        print(f"er: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

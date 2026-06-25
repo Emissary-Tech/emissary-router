@@ -37,6 +37,31 @@ def test_catalog_order_is_cheap_to_expensive() -> None:
     ]
 
 
+def test_cost_score_orders_catalog_cheap_to_expensive() -> None:
+    from emissary_router.catalog import cost_score
+
+    assert (
+        cost_score(CATALOG["gemini-3.1-flash-lite"])
+        < cost_score(CATALOG["claude-haiku-4.5"])
+        < cost_score(CATALOG["claude-sonnet-4.6"])
+    )
+
+
+def test_routing_order_is_by_price_not_dict_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Reverse the catalog's insertion order; routing must still go cheapest-first.
+    from emissary_router import config as config_module
+
+    reordered = dict(reversed(list(CATALOG.items())))
+    monkeypatch.setattr(config_module, "CATALOG", reordered)
+
+    config = _config(models={name: True for name in reordered})
+    assert config.enabled_models() == [
+        "gemini-3.1-flash-lite",
+        "claude-haiku-4.5",
+        "claude-sonnet-4.6",
+    ]
+
+
 def test_enabled_models_follow_catalog_order() -> None:
     config = _config(
         models={
