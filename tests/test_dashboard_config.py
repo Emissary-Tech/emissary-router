@@ -110,6 +110,29 @@ def test_put_rejects_unavailable_provider(tmp_path):
     assert resp.status_code == 400
 
 
+def test_get_config_exposes_policy_and_options(tmp_path):
+    client, _ = _client(tmp_path)
+    body = client.get("/api/config").json()
+    assert body["policy"] == "deviate_if_confident"  # default when unset
+    assert set(body["policies"]) == {"deviate_if_confident", "cache_aware"}
+
+
+def test_put_config_persists_policy(tmp_path):
+    client, cfg = _client(tmp_path)
+    resp = client.put("/api/config", json={"policy": "cache_aware"})
+    assert resp.status_code == 200
+    assert json.loads(cfg.read_text())["policy"] == "cache_aware"
+    assert client.get("/api/config").json()["policy"] == "cache_aware"
+
+
+def test_put_rejects_invalid_policy(tmp_path):
+    client, cfg = _client(tmp_path)
+    resp = client.put("/api/config", json={"policy": "bogus"})
+    assert resp.status_code == 400
+    # file left untouched on invalid input
+    assert "policy" not in json.loads(cfg.read_text())
+
+
 def test_save_triggers_reload_and_no_restart_required(tmp_path):
     calls = []
     client, _ = _client(tmp_path, on_config_change=lambda: calls.append(1))
