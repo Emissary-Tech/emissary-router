@@ -35,12 +35,21 @@ class RouterPipeline:
         self,
         config: AppConfig,
         store: SqliteStore | None = None,
+        cache_ledger: CacheLedger | None = None,
     ):
         self._config = config
         self._classifier = ClassifierClient(config.router)
         self._providers = self._build_providers()
-        self._cache_ledger = CacheLedger()
+        # Reuse an existing ledger across hot-reloads so dashboard config edits don't
+        # wipe warm-cache state. Entries are keyed by (session, provider, model_id,
+        # prefix) and TTL-expire, so carrying them over is always safe: entries for a
+        # model/provider that just changed simply never match and age out.
+        self._cache_ledger = cache_ledger or CacheLedger()
         self._store = store
+
+    @property
+    def cache_ledger(self) -> CacheLedger:
+        return self._cache_ledger
 
     def _build_providers(self):
         provider_names = {

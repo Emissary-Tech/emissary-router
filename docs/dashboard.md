@@ -37,9 +37,9 @@ or send the key as an `x-api-key` or `Authorization: Bearer` header.
   used, and total cost. Delete a whole session with its button.
 - **Settings** — toggle models on/off, choose a provider per model, set the default
   model and confidence, and pick the routing [policy](configuration.md#policy). Saving
-  writes your config and the running gateway reloads it live — no restart needed.
-  (Switching policy rebuilds the router, which resets the in-memory cache ledger that
-  `cache_aware` uses; it re-warms over the next few turns.)
+  writes your config and the running gateway reloads it live — no restart needed. The
+  in-memory cache ledger that `cache_aware` uses is carried across saves, so editing
+  config does not throw away warm-cache state (only a process restart resets it).
 
 Data does not auto-refresh; use the **↻ Refresh** button to pull the latest.
 
