@@ -43,6 +43,15 @@ def dashboard_url(config: AppConfig) -> str | None:
     return url
 
 
+def demo_url(config: AppConfig) -> str | None:
+    if not config.demo.enabled:
+        return None
+    url = gateway_url(config) + "/demo"
+    if config.server.auth_key:
+        url += "?key=" + urllib.parse.quote(config.server.auth_key)
+    return url
+
+
 def announce_dashboard(config: AppConfig, status: "GatewayStatus", open_browser: bool) -> None:
     """Print the dashboard URL and open it in the browser while the gateway is up.
 
@@ -54,6 +63,19 @@ def announce_dashboard(config: AppConfig, status: "GatewayStatus", open_browser:
     if not url:
         return
     print(f"Dashboard: {url}")
+    if open_browser and status.healthy:
+        try:
+            webbrowser.open(url)
+        except Exception:
+            pass
+
+
+def announce_demo(config: AppConfig, status: "GatewayStatus", open_browser: bool) -> None:
+    """Print the conference demo URL and open it while the gateway is up."""
+    url = demo_url(config)
+    if not url:
+        return
+    print(f"Demo: {url}")
     if open_browser and status.healthy:
         try:
             webbrowser.open(url)

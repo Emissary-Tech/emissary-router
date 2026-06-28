@@ -98,6 +98,7 @@ the built-in catalog. See [Configuration](docs/configuration.md) for details.
 - [Configuration](docs/configuration.md)
 - [Commands](docs/commands.md)
 - [Dashboard](docs/dashboard.md)
+- [Demo](docs/demo.md)
 - [Providers and Caching](docs/providers-caching.md)
 - [Pricing](docs/pricing.md)
 - [Thinking](docs/thinking.md)

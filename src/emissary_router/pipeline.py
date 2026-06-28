@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import os
 import time
@@ -26,6 +28,7 @@ from emissary_router.telemetry import (
 logger = logging.getLogger(__name__)
 
 SESSION_HEADER = "x-claude-code-session-id"
+BASELINE_MODEL = "claude-sonnet-4.6"  # the "default Sonnet" side of the demo comparison
 
 
 class RouterPipeline:
@@ -121,6 +124,97 @@ class RouterPipeline:
             on_complete=on_complete,
         )
 
+    # ----- conference demo: default Sonnet vs routed, side by side -----
+
+    async def compare(
+        self, query: str, max_tokens: int = 32000, effort: str | None = None
+    ) -> dict:
+        """Run one query two ways — straight Sonnet vs the router's pick — and return
+        both answers with model, cost, and latency. Single-turn, no tools, so the
+        classifier sees the same shape it was trained on. Demo calls are not written to
+        telemetry.
+
+        `effort` is the Sonnet-native reasoning level (`output_config.effort`), applied
+        to BOTH sides for a fair comparison; each provider converts it for its own model
+        internally. Cost is from actual output, so a large `max_tokens` only avoids
+        truncation."""
+        body: dict = {
+            "messages": [{"role": "user", "content": query}],
+            "max_tokens": max_tokens,
+        }
+        if effort:
+            body["output_config"] = {"effort": effort}
+        decision = await self._route_decision(body)
+
+        baseline, routed = await asyncio.gather(
+            self._complete_once(BASELINE_MODEL, body),
+            self._complete_once(decision.model_name, body),
+        )
+        routed["route_reason"] = decision.reason
+        routed["probabilities"] = decision.probabilities
+
+        b_cost, r_cost = baseline.get("cost_usd") or 0.0, routed.get("cost_usd") or 0.0
+        savings_pct = round((b_cost - r_cost) / b_cost * 100) if b_cost > 0 else 0
+        return {
+            "query": query,
+            "baseline_model": BASELINE_MODEL,
+            "baseline": baseline,
+            "routed": routed,
+            "savings_pct": savings_pct,
+        }
+
+    async def _route_decision(self, body: dict) -> RouteDecision:
+        classifier_input, _ = request_to_classifier_input(body)
+        try:
+            probabilities = await self._classifier.predict(classifier_input)
+        except (httpx.HTTPError, KeyError, IndexError, ValueError, TypeError) as exc:
+            logger.warning("demo: classifier failed; using default: %s", exc)
+            return self._default_decision("fallback: router_issue")
+        if self._missing_probability_labels(probabilities):
+            return self._default_decision("fallback: classifier_label_mismatch")
+        return choose_model(self._config, probabilities)
+
+    async def _complete_once(self, model_name: str, body: dict) -> dict:
+        model = self._config.resolve_model(model_name)
+        provider = self._providers.get(model.provider) or build_provider(
+            model.provider,
+            ProviderConfig(type=model.provider, api_key=os.environ.get(PROVIDER_ENV[model.provider])),
+        )
+        captured: dict = {}
+
+        def on_complete(usage: Usage, provider_metadata: dict) -> None:
+            captured["usage"] = usage
+            captured["http_status"] = provider_metadata.get("http_status")
+
+        started = time.time()
+        response = await provider.messages(
+            AnthropicRequest(body=dict(body), headers={}),
+            model=model,
+            context=RequestContext(
+                request_id="demo",
+                conversation_id=None,
+                classifier_input="",
+                requested_model=model_name,
+            ),
+            on_complete=on_complete,
+        )
+        latency_ms = round((time.time() - started) * 1000, 1)
+        usage = captured.get("usage") or Usage()
+        status = captured.get("http_status")
+        return {
+            "model": model_name,
+            "provider": model.provider,
+            "answer": _response_text(response),
+            "error": None if (status is None or status < 400) else f"upstream {status}",
+            "cost_usd": round(_cost_usd(CATALOG[model_name].pricing, usage), 6),
+            "prompt_tokens": usage.input_tokens
+            + usage.cache_read_input_tokens
+            + usage.cache_creation_input_tokens,
+            "output_tokens": usage.output_tokens,
+            "latency_ms": latency_ms,
+            "http_status": status,
+        }
+
     def _default_decision(self, reason: str) -> RouteDecision:
         return RouteDecision(
             model_name=self._config.default,
@@ -186,6 +280,26 @@ def _header(headers: dict[str, str], name: str) -> str | None:
 
 def _int_or_none(value: object) -> int | None:
     return int(value) if isinstance(value, int) else None
+
+
+def _response_text(response: Response) -> str:
+    """Pull the assistant text out of a provider response (Anthropic message shape)."""
+    raw = getattr(response, "body", b"")
+    try:
+        payload = json.loads(raw)
+    except (ValueError, TypeError):
+        return ""
+    content = payload.get("content") if isinstance(payload, dict) else None
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = [
+            block.get("text", "")
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        ]
+        return "".join(parts).strip()
+    return ""
 
 
 def _cost_usd(price: TokenPricing, usage: Usage) -> float:

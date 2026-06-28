@@ -198,6 +198,15 @@ class TelemetryConfig(BaseModel):
     max_events: int | None = Field(default=50000, ge=0)
 
 
+class DemoConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Conference split-screen demo (default Sonnet vs routed). Makes real model calls,
+    # so it sits behind the same auth as the dashboard; mounted only when enabled.
+    enabled: bool = True
+    streaming: bool = False  # default UI mode; the page can still toggle it live
+
+
 class AppConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -210,6 +219,7 @@ class AppConfig(BaseModel):
     router: RouterConfig = Field(default_factory=RouterConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
+    demo: DemoConfig = Field(default_factory=DemoConfig)
 
     @field_validator("models", mode="before")
     @classmethod

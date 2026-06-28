@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from starlette.responses import JSONResponse
 
 from emissary_router.config import load_config, user_config_path
-from emissary_router.dashboard import build_dashboard_router
+from emissary_router.dashboard import build_dashboard_router, build_demo_router
 from emissary_router.pipeline import RouterPipeline
 from emissary_router.telemetry import SqliteStore
 
@@ -43,6 +43,14 @@ def create_app() -> FastAPI:
                 auth_key=config.server.auth_key,
                 config_path=config_path,
                 on_config_change=reload_config,
+            )
+        )
+
+    if config.demo.enabled:
+        app.include_router(
+            build_demo_router(
+                auth_key=config.server.auth_key,
+                streaming_default=config.demo.streaming,
             )
         )
 

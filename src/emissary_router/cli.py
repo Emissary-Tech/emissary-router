@@ -22,7 +22,9 @@ from emissary_router.config import (
 )
 from emissary_router.launch import (
     announce_dashboard,
+    announce_demo,
     dashboard_url,
+    demo_url,
     ensure_gateway,
     exec_claude,
     gateway_status,
@@ -201,6 +203,22 @@ def _cmd_start(args: argparse.Namespace) -> int:
     return 0 if status.healthy else 1
 
 
+def _cmd_demo(args: argparse.Namespace) -> int:
+    _set_config_env(args.config)
+    config_path = (Path(args.config) if args.config else user_config_path()).expanduser().resolve()
+    config = _load_config_or_hint(config_path)
+    if config is None:
+        return 1
+    if not config.demo.enabled:
+        print('demo is disabled; set "demo": {"enabled": true} in your config', file=sys.stderr)
+        return 1
+    _warn_missing_env(config)
+    status = ensure_gateway(config, config_path)
+    print(json.dumps(status.__dict__, indent=2))
+    announce_demo(config, status, open_browser=not getattr(args, "no_open", False))
+    return 0 if status.healthy else 1
+
+
 def _cmd_restart(args: argparse.Namespace) -> int:
     stopped = stop_gateway()
     if stopped.message == "still running after SIGKILL":
@@ -259,6 +277,11 @@ def build_parser() -> argparse.ArgumentParser:
     restart.add_argument("--config", default=None)
     restart.add_argument("--no-open", action="store_true", help="Do not open the dashboard in a browser")
     restart.set_defaults(func=_cmd_restart)
+
+    demo = sub.add_parser("demo", help="Start the gateway and open the split-screen demo")
+    demo.add_argument("--config", default=None)
+    demo.add_argument("--no-open", action="store_true", help="Do not open the demo in a browser")
+    demo.set_defaults(func=_cmd_demo)
 
     debug = sub.add_parser("debug", help="Run the gateway in the foreground for debugging")
     debug.add_argument("--config", default=None)
