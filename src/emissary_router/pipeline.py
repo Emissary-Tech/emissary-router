@@ -286,6 +286,114 @@ class RouterPipeline:
             "http_status": status,
         }, usage
 
+    async def stream_chat(
+        self,
+        baseline_messages: list[dict],
+        routed_messages: list[dict],
+        session_id: str | None = None,
+        max_tokens: int = 32000,
+        effort: str | None = None,
+        policy: str | None = None,
+    ):
+        """Stream both sides of one turn as one merged event stream. Yields dicts:
+        `{"side","type":"delta"/"meta"/"done", ...}`. Same routing + cache wiring as
+        chat(); both sides run concurrently and their events interleave."""
+        queue: asyncio.Queue = asyncio.Queue()
+
+        async def pump(side: str, gen):
+            try:
+                async for ev in gen:
+                    await queue.put(ev)
+            except Exception as exc:  # surface as a done so the merge still completes
+                await queue.put({
+                    "side": side, "type": "done", "model": "-", "error": str(exc),
+                    "cost_usd": 0.0, "router_ms": 0.0, "model_ms": 0.0, "total_ms": 0.0,
+                })
+
+        tasks = [
+            asyncio.create_task(pump("baseline", self._stream_side("baseline", BASELINE_MODEL, baseline_messages, max_tokens, effort))),
+            asyncio.create_task(pump("routed", self._stream_routed(routed_messages, max_tokens, effort, session_id, policy))),
+        ]
+        remaining = 2
+        try:
+            while remaining:
+                ev = await queue.get()
+                yield ev
+                if ev.get("type") == "done":
+                    remaining -= 1
+        finally:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _stream_routed(self, messages, max_tokens, effort, session_id, policy):
+        body = self._demo_body(messages, max_tokens, effort)
+        headers = {SESSION_HEADER: session_id} if session_id else {}
+        cost_features = extract_request_cost_features(
+            body, headers, self._cache_ledger.expected_output_tokens()
+        )
+        started = time.monotonic()
+        decision = await self._route_decision(body, cost_features=cost_features, policy=policy)
+        router_ms = round((time.monotonic() - started) * 1000, 1)
+        yield {"side": "routed", "type": "meta", "model": decision.model_name,
+               "route_reason": decision.reason, "router_ms": router_ms}
+        captured: dict = {}
+        async for ev in self._stream_side("routed", decision.model_name, messages, max_tokens, effort, captured):
+            if ev.get("type") == "done":
+                ev["router_ms"] = router_ms
+                ev["total_ms"] = round(router_ms + ev["model_ms"], 1)
+                ev["route_reason"] = decision.reason
+            yield ev
+        self._cache_ledger.observe(
+            self._config.resolve_model(decision.model_name), cost_features, captured.get("usage") or Usage()
+        )
+
+    async def _stream_side(self, side, model_name, messages, max_tokens, effort, captured=None):
+        model = self._config.resolve_model(model_name)
+        provider = self._providers.get(model.provider) or build_provider(
+            model.provider,
+            ProviderConfig(type=model.provider, api_key=os.environ.get(PROVIDER_ENV[model.provider])),
+        )
+        send_body = self._demo_body(messages, max_tokens, effort)
+        send_body["messages"] = _with_cache_breakpoint(send_body["messages"])
+        send_body["stream"] = True
+        cap: dict = {}
+
+        def on_complete(usage: Usage, provider_metadata: dict) -> None:
+            cap["usage"] = usage
+            cap["status"] = provider_metadata.get("http_status")
+
+        started = time.time()
+        response = await provider.messages(
+            AnthropicRequest(body=send_body, headers={}),
+            model=model,
+            context=RequestContext(
+                request_id="demo", conversation_id=None, classifier_input="", requested_model=model_name
+            ),
+            on_complete=on_complete,
+        )
+        buf = ""
+        async for chunk in response.body_iterator:
+            text = chunk.decode("utf-8", "replace") if isinstance(chunk, (bytes, bytearray)) else str(chunk)
+            buf += text
+            while "\n" in buf:
+                line, buf = buf.split("\n", 1)
+                delta = _sse_text_delta(line)
+                if delta:
+                    yield {"side": side, "type": "delta", "text": delta}
+        latency_ms = round((time.time() - started) * 1000, 1)
+        usage = cap.get("usage") or Usage()
+        if captured is not None:
+            captured["usage"] = usage
+        status = cap.get("status")
+        yield {
+            "side": side, "type": "done", "model": model_name, "provider": model.provider,
+            "error": None if (status is None or status < 400) else f"upstream {status}",
+            "cost_usd": round(_cost_usd(CATALOG[model_name].pricing, usage), 6),
+            "output_tokens": usage.output_tokens,
+            "cache_read_tokens": usage.cache_read_input_tokens,
+            "cache_creation_tokens": usage.cache_creation_input_tokens,
+            "router_ms": 0.0, "model_ms": latency_ms, "total_ms": latency_ms,
+        }
+
     def _default_decision(self, reason: str) -> RouteDecision:
         return RouteDecision(
             model_name=self._config.default,
@@ -351,6 +459,25 @@ def _header(headers: dict[str, str], name: str) -> str | None:
 
 def _int_or_none(value: object) -> int | None:
     return int(value) if isinstance(value, int) else None
+
+
+def _sse_text_delta(line: str) -> str | None:
+    """Pull assistant text out of one Anthropic-format SSE line (both demo providers emit
+    this shape). Returns the text of a content_block_delta/text_delta, else None."""
+    if not line.startswith("data:"):
+        return None
+    payload = line[5:].strip()
+    if not payload or payload == "[DONE]":
+        return None
+    try:
+        event = json.loads(payload)
+    except (ValueError, TypeError):
+        return None
+    if event.get("type") == "content_block_delta":
+        delta = event.get("delta") or {}
+        if delta.get("type") == "text_delta":
+            return delta.get("text") or None
+    return None
 
 
 def _with_cache_breakpoint(messages: list[dict]) -> list[dict]:

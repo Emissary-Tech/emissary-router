@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Body, Depends, Request
-from starlette.responses import HTMLResponse, JSONResponse
+from starlette.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from emissary_router.dashboard.routes import _make_auth_dependency
 
@@ -20,31 +22,52 @@ def build_demo_router(auth_key: str | None = None, streaming_default: bool = Fal
 
     @router.post("/api/demo/chat")
     async def chat(request: Request, payload: dict = Body(...)) -> JSONResponse:
-        baseline = payload.get("baseline")
-        routed = payload.get("routed")
-        if not _valid_messages(baseline) or not _valid_messages(routed):
-            return JSONResponse({"error": "baseline and routed message lists are required"}, status_code=400)
-        if len(baseline) > 100 or len(routed) > 100:
-            return JSONResponse({"error": "conversation too long"}, status_code=400)
-
-        max_tokens = _clamp_int(payload.get("max_tokens"), default=32000, lo=256, hi=64000)
-        effort = payload.get("effort")
-        effort = effort if effort in {"low", "medium", "high"} else None
-        policy = payload.get("policy")
-        policy = policy if policy in {"deviate_if_confident", "cache_aware"} else None
-        session_id = payload.get("session_id")
-        session_id = session_id if isinstance(session_id, str) and session_id else None
-
+        args, error = _parse_payload(payload)
+        if error:
+            return JSONResponse({"error": error}, status_code=400)
         try:
-            result = await request.app.state.pipeline.chat(
-                baseline, routed, session_id=session_id, max_tokens=max_tokens,
-                effort=effort, policy=policy,
-            )
+            result = await request.app.state.pipeline.chat(**args)
         except Exception as exc:  # surface upstream/key issues to the page instead of 500-ing silently
             return JSONResponse({"error": str(exc)}, status_code=502)
         return JSONResponse(result)
 
+    @router.post("/api/demo/stream", response_model=None)
+    async def stream(request: Request, payload: dict = Body(...)) -> StreamingResponse | JSONResponse:
+        args, error = _parse_payload(payload)
+        if error:
+            return JSONResponse({"error": error}, status_code=400)
+        pipeline = request.app.state.pipeline
+
+        async def events():
+            try:
+                async for ev in pipeline.stream_chat(**args):
+                    yield "data: " + json.dumps(ev) + "\n\n"
+            except Exception as exc:
+                yield "data: " + json.dumps({"type": "fatal", "error": str(exc)}) + "\n\n"
+
+        return StreamingResponse(events(), media_type="text/event-stream")
+
     return router
+
+
+def _parse_payload(payload: dict) -> tuple[dict | None, str | None]:
+    baseline = payload.get("baseline")
+    routed = payload.get("routed")
+    if not _valid_messages(baseline) or not _valid_messages(routed):
+        return None, "baseline and routed message lists are required"
+    if len(baseline) > 100 or len(routed) > 100:
+        return None, "conversation too long"
+    effort = payload.get("effort")
+    policy = payload.get("policy")
+    session_id = payload.get("session_id")
+    return {
+        "baseline_messages": baseline,
+        "routed_messages": routed,
+        "session_id": session_id if isinstance(session_id, str) and session_id else None,
+        "max_tokens": _clamp_int(payload.get("max_tokens"), default=32000, lo=256, hi=64000),
+        "effort": effort if effort in {"low", "medium", "high"} else None,
+        "policy": policy if policy in {"deviate_if_confident", "cache_aware"} else None,
+    }, None
 
 
 def _valid_messages(msgs) -> bool:
@@ -78,7 +101,9 @@ def demo_html(streaming_default: bool = False) -> str:
     chips = "".join(
         f'<button class="chip" data-q="{_esc(q)}">{_esc(q)}</button>' for q in PRESETS
     )
-    return _PAGE.replace("__CHIPS__", chips)
+    return _PAGE.replace("__CHIPS__", chips).replace(
+        "__STREAM_CHECKED__", "checked" if streaming_default else ""
+    )
 
 
 def _esc(s: str) -> str:
@@ -186,6 +211,7 @@ _PAGE = """<!doctype html>
         <option value="64000">64k</option>
       </select>
     </label>
+    <label><input type="checkbox" id="stream" __STREAM_CHECKED__/> Stream</label>
     <span>both sides use the same settings; converted per model</span>
   </div>
 </main>
@@ -217,8 +243,8 @@ function bubble(paneId, role, text) {
   return { bub: b, foot, pane };
 }
 
-function fill(slot, d, routed) {
-  slot.bub.textContent = d.error ? ("Error: " + d.error) : (d.answer || "(no text)");
+function fill(slot, d, routed, keepText) {
+  if (!keepText) slot.bub.textContent = d.error ? ("Error: " + d.error) : (d.answer || "(no text)");
   if (routed) {
     slot.foot.innerHTML = '<span class="badge">' + short(d.model) + "</span> " + usd(d.cost_usd) +
       ' · <span class="mono">router ' + ms(d.router_ms) + " + model " + ms(d.model_ms) +
@@ -240,6 +266,58 @@ function updateTotals(j) {
   $("t-turns").textContent = turns + " turn" + (turns === 1 ? "" : "s");
 }
 
+const hdrs = () => { const h = { "content-type": "application/json" }; if (KEY) h["x-api-key"] = KEY; return h; };
+const reqBody = () => JSON.stringify({
+  baseline: baselineMsgs, routed: routedMsgs, session_id: sessionId,
+  policy: $("policy").value, max_tokens: parseInt($("maxtok").value, 10), effort: $("effort").value || null,
+});
+
+async function onceTurn(bSlot, rSlot) {
+  const r = await fetch("/api/demo/chat", { method: "POST", headers: hdrs(), body: reqBody() });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.status);
+  fill(bSlot, j.baseline, false);
+  fill(rSlot, j.routed, true);
+  baselineMsgs.push({ role: "assistant", content: j.baseline.answer || "" });
+  routedMsgs.push({ role: "assistant", content: j.routed.answer || "" });
+  updateTotals(j);
+}
+
+async function streamTurn(bSlot, rSlot) {
+  const slots = { baseline: bSlot, routed: rSlot };
+  const acc = { baseline: "", routed: "" }, fin = {};
+  const r = await fetch("/api/demo/stream", { method: "POST", headers: hdrs(), body: reqBody() });
+  if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || r.status); }
+  const reader = r.body.getReader(), dec = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf("\\n\\n")) >= 0) {
+      const dl = buf.slice(0, idx).split("\\n").find((l) => l.startsWith("data:"));
+      buf = buf.slice(idx + 2);
+      if (!dl) continue;
+      let ev; try { ev = JSON.parse(dl.slice(5).trim()); } catch (_) { continue; }
+      if (ev.type === "fatal") throw new Error(ev.error || "stream error");
+      const slot = slots[ev.side];
+      if (!slot) continue;
+      if (ev.type === "delta") {
+        if (!acc[ev.side]) slot.bub.textContent = "";
+        acc[ev.side] += ev.text; slot.bub.textContent = acc[ev.side];
+        slot.pane.scrollTop = slot.pane.scrollHeight;
+      } else if (ev.type === "done") {
+        fin[ev.side] = ev;
+        fill(slot, { ...ev, answer: acc[ev.side] || ev.answer }, ev.side === "routed", true);
+      }
+    }
+  }
+  baselineMsgs.push({ role: "assistant", content: acc.baseline });
+  routedMsgs.push({ role: "assistant", content: acc.routed });
+  if (fin.baseline && fin.routed) updateTotals({ baseline: fin.baseline, routed: fin.routed });
+}
+
 async function send() {
   const q = $("q").value.trim();
   if (!q) return;
@@ -250,21 +328,8 @@ async function send() {
   const bSlot = bubble("pane-base", "asst", "…");
   const rSlot = bubble("pane-routed", "asst", "…");
   try {
-    const headers = { "content-type": "application/json" };
-    if (KEY) headers["x-api-key"] = KEY;
-    const body = {
-      baseline: baselineMsgs, routed: routedMsgs, session_id: sessionId,
-      policy: $("policy").value, max_tokens: parseInt($("maxtok").value, 10),
-      effort: $("effort").value || null,
-    };
-    const r = await fetch("/api/demo/chat", { method: "POST", headers, body: JSON.stringify(body) });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || r.status);
-    fill(bSlot, j.baseline, false);
-    fill(rSlot, j.routed, true);
-    baselineMsgs.push({ role: "assistant", content: j.baseline.answer || "" });
-    routedMsgs.push({ role: "assistant", content: j.routed.answer || "" });
-    updateTotals(j);
+    if ($("stream").checked) await streamTurn(bSlot, rSlot);
+    else await onceTurn(bSlot, rSlot);
   } catch (e) {
     bSlot.bub.textContent = "Error: " + e.message;
     rSlot.bub.textContent = "";

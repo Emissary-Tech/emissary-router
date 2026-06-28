@@ -4,7 +4,7 @@ import asyncio
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, StreamingResponse
 
 from emissary_router.caching.usage import Usage
 from emissary_router.config import AppConfig
@@ -128,12 +128,62 @@ def test_chat_observes_served_model_into_ledger():
     assert len(pipe._cache_ledger._entries) == 1
 
 
+class _StreamProvider:
+    name = "anthropic"
+
+    async def messages(self, request, model, context, on_complete):
+        async def gen():
+            yield 'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hel"}}\n\n'
+            yield 'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"lo"}}\n\n'
+            on_complete(Usage(input_tokens=100, output_tokens=2), {"http_status": 200})
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+def test_stream_chat_yields_deltas_and_done():
+    pipe = _pipeline(_ConfidentHaiku())
+    pipe._providers = {"anthropic": _StreamProvider()}
+
+    async def collect():
+        return [ev async for ev in pipe.stream_chat(_turn("hi"), _turn("hi"), session_id="s")]
+
+    evs = asyncio.run(collect())
+    base = "".join(e["text"] for e in evs if e.get("side") == "baseline" and e["type"] == "delta")
+    routed = "".join(e["text"] for e in evs if e.get("side") == "routed" and e["type"] == "delta")
+    assert base == "Hello"
+    assert routed == "Hello"
+    dones = [e for e in evs if e["type"] == "done"]
+    assert {e["side"] for e in dones} == {"baseline", "routed"}
+    assert any(e["type"] == "meta" and e["side"] == "routed" for e in evs)
+    routed_done = next(e for e in dones if e["side"] == "routed")
+    assert routed_done["total_ms"] >= routed_done["model_ms"]  # router time included
+
+
+def test_stream_endpoint_emits_sse():
+    resp = _client().post(
+        "/api/demo/stream",
+        json={"baseline": [{"role": "user", "content": "hi"}], "routed": [{"role": "user", "content": "hi"}]},
+    )
+    assert resp.status_code == 200
+    body = resp.text
+    assert "data:" in body
+    assert "claude-haiku-4.5" in body
+
+
 class _RecordingPipeline:
     def __init__(self):
         self.kwargs = None
 
-    async def chat(self, baseline, routed, session_id=None, max_tokens=32000, effort=None, policy=None):
-        self.kwargs = {"baseline": baseline, "routed": routed, "session_id": session_id,
+    async def stream_chat(self, baseline_messages, routed_messages, session_id=None, max_tokens=32000, effort=None, policy=None):
+        yield {"side": "routed", "type": "meta", "model": "claude-haiku-4.5", "router_ms": 2}
+        yield {"side": "baseline", "type": "delta", "text": "hi"}
+        yield {"side": "baseline", "type": "done", "model": "claude-sonnet-4.6", "cost_usd": 0.002,
+               "model_ms": 10, "router_ms": 0.0, "total_ms": 10}
+        yield {"side": "routed", "type": "done", "model": "claude-haiku-4.5", "cost_usd": 0.0007,
+               "model_ms": 8, "router_ms": 2, "total_ms": 10}
+
+    async def chat(self, baseline_messages, routed_messages, session_id=None, max_tokens=32000, effort=None, policy=None):
+        self.kwargs = {"baseline": baseline_messages, "routed": routed_messages, "session_id": session_id,
                        "max_tokens": max_tokens, "effort": effort, "policy": policy}
         return {
             "baseline_model": "claude-sonnet-4.6",
