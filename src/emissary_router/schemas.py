@@ -23,3 +23,5 @@ class RouteDecision:
     model_name: str
     reason: str
     probabilities: dict[str, float]
+    estimated_costs: dict[str, dict] | None = None
+    cache_prediction: dict | None = None

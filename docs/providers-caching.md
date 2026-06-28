@@ -43,3 +43,11 @@ router preserves each provider's native mechanism rather than managing caches it
 
 Cache reads/writes are recorded in [telemetry](telemetry.md) when the provider
 reports them.
+
+`cache_aware` routing treats cache predictions with two confidence levels:
+
+- `predictable` — Anthropic direct cache accounting. The router can trust observed
+  cache creation/read signals enough to use them in the next cost estimate.
+- `best_effort` — implicit/provider-mediated cache behavior such as Gemini through
+  OpenRouter. Matching prefix + TTL is only a hint, so the router does not discount it
+  as warm until it has observed an actual cache read.

@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+from emissary_router.caching.ledger import CacheLedger
+from emissary_router.caching.usage import Usage
 from emissary_router.config import AppConfig
+from emissary_router.routing.cache_cost import (
+    CachePrediction,
+    EstimatedCost,
+    RequestCostFeatures,
+    is_cheaper,
+)
 from emissary_router.routing.policy import choose_model
 
 
-def _config() -> AppConfig:
+def _config(policy: str = "deviate_if_confident") -> AppConfig:
     return AppConfig.model_validate(
         {
             "models": {
@@ -14,6 +22,7 @@ def _config() -> AppConfig:
             },
             "default": "claude-sonnet-4.6",
             "confidence": 0.8,
+            "policy": policy,
         }
     )
 
@@ -44,3 +53,139 @@ def test_falls_back_to_default_when_no_model_is_confident() -> None:
 
     assert decision.model_name == "claude-sonnet-4.6"
     assert decision.reason == "default"
+
+
+def test_cache_aware_keeps_default_when_candidate_below_confidence() -> None:
+    config = _config(policy="cache_aware")
+    ledger = CacheLedger()
+    features = _features()
+
+    decision = choose_model(
+        config,
+        {
+            "gemini-3.1-flash-lite": 0.2,
+            "claude-haiku-4.5": 0.79,
+            "claude-sonnet-4.6": 0.2,
+        },
+        cost_features=features,
+        cache_ledger=ledger,
+    )
+
+    assert decision.model_name == "claude-sonnet-4.6"
+    assert decision.reason == "cache_aware:no_confident_candidate"
+
+
+def test_cache_aware_keeps_warm_default_when_candidate_cold_costs_more() -> None:
+    config = _config(policy="cache_aware")
+    ledger = CacheLedger()
+    features = _features(prefix_tokens=30000, input_tokens=31000)
+    ledger.observe(
+        config.resolve_model("claude-sonnet-4.6"),
+        features,
+        Usage(cache_creation_input_tokens=30000),
+    )
+
+    decision = choose_model(
+        config,
+        {
+            "gemini-3.1-flash-lite": 0.2,
+            "claude-haiku-4.5": 0.95,
+            "claude-sonnet-4.6": 0.1,
+        },
+        cost_features=features,
+        cache_ledger=ledger,
+    )
+
+    assert decision.model_name == "claude-sonnet-4.6"
+    assert decision.cache_prediction["warm"] is True
+
+
+def test_cache_aware_deviates_when_confident_candidate_is_warm_and_cheaper() -> None:
+    config = _config(policy="cache_aware")
+    ledger = CacheLedger()
+    features = _features(prefix_tokens=30000, input_tokens=31000)
+    ledger.observe(
+        config.resolve_model("claude-haiku-4.5"),
+        features,
+        Usage(cache_creation_input_tokens=30000),
+    )
+
+    decision = choose_model(
+        config,
+        {
+            "gemini-3.1-flash-lite": 0.2,
+            "claude-haiku-4.5": 0.95,
+            "claude-sonnet-4.6": 0.1,
+        },
+        cost_features=features,
+        cache_ledger=ledger,
+    )
+
+    assert decision.model_name == "claude-haiku-4.5"
+    assert decision.reason == "cache_aware:candidate_cheaper"
+    assert decision.cache_prediction["warm"] is True
+
+
+def test_cache_aware_keeps_warm_default_when_history_dominates_prefix() -> None:
+    """Regression: the warm cache covers the whole conversation history, not just the
+    small system+tools prefix. A cheaper-when-cold candidate must NOT win and bust that
+    cache. Before the fix, the warm credit was clamped to system+tools and the default
+    was overpriced ~5x, so the policy wrongly deviated."""
+    config = _config(policy="cache_aware")
+    ledger = CacheLedger()
+    # system+tools prefix is small (8k); the conversation history dominates input (68k).
+    features = _features(prefix_tokens=8000, input_tokens=68000)
+    # Last turn the provider reported a large warm read on the default.
+    ledger.observe(
+        config.resolve_model("claude-sonnet-4.6"),
+        features,
+        Usage(input_tokens=1000, cache_read_input_tokens=67000),
+    )
+
+    decision = choose_model(
+        config,
+        {
+            "gemini-3.1-flash-lite": 0.2,
+            "claude-haiku-4.5": 0.95,  # confident and cheaper *when cold*
+            "claude-sonnet-4.6": 0.1,
+        },
+        cost_features=features,
+        cache_ledger=ledger,
+    )
+
+    assert decision.model_name == "claude-sonnet-4.6"
+    # A confident candidate (haiku) existed but the warm default won after cache.
+    assert decision.reason == "cache_aware:warm_default_cheaper"
+    assert decision.cache_prediction["warm"] is True
+    # The warm credit must reflect the observed cache (67k), not the system+tools prefix.
+    assert decision.estimated_costs["claude-sonnet-4.6"]["cache_read_tokens"] == 67000
+
+
+def test_cache_aware_uses_any_positive_savings_without_margin() -> None:
+    baseline = _estimated("claude-sonnet-4.6", total_usd=1.0)
+    candidate = _estimated("claude-haiku-4.5", total_usd=0.999999)
+
+    assert is_cheaper(candidate, baseline) is True
+
+
+def _features(prefix_tokens: int = 10000, input_tokens: int = 11000) -> RequestCostFeatures:
+    return RequestCostFeatures(
+        session_id="session-1",
+        prefix_hash="prefix",
+        estimated_input_tokens=input_tokens,
+        estimated_cacheable_prefix_tokens=prefix_tokens,
+        estimated_fresh_input_tokens=max(input_tokens - prefix_tokens, 0),
+        expected_output_tokens=1024,
+    )
+
+
+def _estimated(model_name: str, total_usd: float) -> EstimatedCost:
+    return EstimatedCost(
+        model_name=model_name,
+        total_usd=total_usd,
+        input_tokens=0,
+        cache_read_tokens=0,
+        cache_write_tokens=0,
+        expected_output_tokens=0,
+        cache_prediction=CachePrediction(warm=False, cached_tokens=0, confidence=None, reason="test"),
+    )

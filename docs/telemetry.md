@@ -20,7 +20,11 @@ request/response bodies and prompt text are never stored, only the metadata belo
   `background` (e.g. title and summary calls)
 - `requested_model` — the model Claude Code asked for
 - `served_model` / `provider` / `model_id` — what it was actually routed to
-- `route_reason` — `default` or `deviate_if_confident:p>=<confidence>`
+- `route_reason` — why the model was chosen: `default`, `deviate_if_confident:p>=0.8`,
+  or one of the `cache_aware:*` reasons — `no_confident_candidate` (no cheaper model
+  cleared `confidence`), `warm_default_cheaper` (a confident candidate existed but the
+  warm default won after cache), `candidate_cheaper` (deviated). Failures record
+  `fallback: router_issue` (classifier unreachable) or `error` (upstream call failed)
 - `input_tokens` / `output_tokens` — uncached input and output token counts
 - `cache_read_tokens` / `cache_creation_tokens` — cache-read (hit) and cache-write tokens
 - `cost_usd` — estimated cost from the catalog price of the served model

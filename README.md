@@ -79,7 +79,8 @@ Toggle models in `~/.emissary-router/config.json`:
     "gemini-3.1-flash-lite": { "enabled": true, "provider": "openrouter" }
   },
   "default": "claude-sonnet-4.6",
-  "confidence": 0.8
+  "confidence": 0.8,
+  "policy": "deviate_if_confident"
 }
 ```
 
@@ -91,7 +92,13 @@ Built-in models:
 
 Set `enabled: false` to drop a model, and `provider` to choose how it's served.
 Users cannot add arbitrary upstream models in V1; model id and pricing are owned by
-the built-in catalog. See [Configuration](docs/configuration.md) for details.
+the built-in catalog.
+
+`policy` controls how routing chooses between them. The default `deviate_if_confident`
+picks the cheapest model the classifier is confident about. For long Claude Code
+sessions, set `"policy": "cache_aware"` so the router accounts for the prompt cache and
+avoids switching models in a way that would bust it (which can otherwise cost *more*
+than not routing at all). See [Configuration](docs/configuration.md) for details.
 
 ## Docs
 

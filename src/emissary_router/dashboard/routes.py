@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Callable
+from typing import Callable, get_args
 
 import yaml
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
@@ -92,7 +92,13 @@ def build_dashboard_router(
                 }
             )
         return JSONResponse(
-            {"default": cfg.default, "confidence": cfg.confidence, "models": models}
+            {
+                "default": cfg.default,
+                "confidence": cfg.confidence,
+                "policy": cfg.policy,
+                "policies": list(get_args(AppConfig.model_fields["policy"].annotation)),
+                "models": models,
+            }
         )
 
     @router.put("/api/config")
@@ -124,6 +130,8 @@ def build_dashboard_router(
             raw["default"] = payload["default"]
         if "confidence" in payload:
             raw["confidence"] = float(payload["confidence"])
+        if "policy" in payload:
+            raw["policy"] = payload["policy"]
         try:
             AppConfig.model_validate(raw)
         except Exception as exc:
