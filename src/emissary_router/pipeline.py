@@ -149,44 +149,85 @@ class RouterPipeline:
 
     # ----- conference demo: default Sonnet vs routed, side by side -----
 
-    async def compare(
-        self, query: str, max_tokens: int = 32000, effort: str | None = None
+    async def chat(
+        self,
+        baseline_messages: list[dict],
+        routed_messages: list[dict],
+        session_id: str | None = None,
+        max_tokens: int = 32000,
+        effort: str | None = None,
+        policy: str | None = None,
     ) -> dict:
-        """Run one query two ways — straight Sonnet vs the router's pick — and return
-        both answers with model, cost, and latency. Single-turn, no tools, so the
-        classifier sees the same shape it was trained on. Demo calls are not written to
-        telemetry.
+        """One turn of two parallel conversations — straight Sonnet vs the routed
+        system. Each side carries its own history (the answers diverge), and the routed
+        side is re-routed every turn. The routed latency is split into router (classifier)
+        time and model time. `effort` is the Sonnet-native reasoning level, applied to
+        both sides; each provider converts it for its own model. Cost is from actual
+        output.
 
-        `effort` is the Sonnet-native reasoning level (`output_config.effort`), applied
-        to BOTH sides for a fair comparison; each provider converts it for its own model
-        internally. Cost is from actual output, so a large `max_tokens` only avoids
-        truncation."""
-        body: dict = {
-            "messages": [{"role": "user", "content": query}],
-            "max_tokens": max_tokens,
-        }
-        if effort:
-            body["output_config"] = {"effort": effort}
-        decision = await self._route_decision(body)
-
+        `policy` overrides the routing policy for this turn (so the page can toggle
+        deviate_if_confident vs cache_aware live), and `session_id` scopes the cache
+        ledger to this chat. The conversation prefix is sent with a cache breakpoint, so
+        staying on a model reuses its cache and switching busts it — which is exactly the
+        cost difference cache_aware weighs. Demo calls are not written to telemetry."""
         baseline, routed = await asyncio.gather(
-            self._complete_once(BASELINE_MODEL, body),
-            self._complete_once(decision.model_name, body),
+            self._run_side(BASELINE_MODEL, baseline_messages, max_tokens, effort),
+            self._route_and_run(routed_messages, max_tokens, effort, session_id, policy),
         )
-        routed["route_reason"] = decision.reason
-        routed["probabilities"] = decision.probabilities
-
-        b_cost, r_cost = baseline.get("cost_usd") or 0.0, routed.get("cost_usd") or 0.0
+        b_cost = baseline.get("cost_usd") or 0.0
+        r_cost = routed.get("cost_usd") or 0.0
         savings_pct = round((b_cost - r_cost) / b_cost * 100) if b_cost > 0 else 0
         return {
-            "query": query,
             "baseline_model": BASELINE_MODEL,
             "baseline": baseline,
             "routed": routed,
             "savings_pct": savings_pct,
         }
 
-    async def _route_decision(self, body: dict) -> RouteDecision:
+    def _demo_body(self, messages: list[dict], max_tokens: int, effort: str | None) -> dict:
+        body: dict = {"messages": messages, "max_tokens": max_tokens}
+        if effort:
+            body["output_config"] = {"effort": effort}
+        return body
+
+    async def _run_side(
+        self, model_name: str, messages: list[dict], max_tokens: int, effort: str | None
+    ) -> dict:
+        res, _usage = await self._complete_once(model_name, self._demo_body(messages, max_tokens, effort))
+        res["router_ms"] = 0.0
+        res["model_ms"] = res["latency_ms"]
+        res["total_ms"] = res["latency_ms"]
+        return res
+
+    async def _route_and_run(
+        self,
+        messages: list[dict],
+        max_tokens: int,
+        effort: str | None,
+        session_id: str | None,
+        policy: str | None,
+    ) -> dict:
+        body = self._demo_body(messages, max_tokens, effort)
+        headers = {SESSION_HEADER: session_id} if session_id else {}
+        cost_features = extract_request_cost_features(
+            body, headers, self._cache_ledger.expected_output_tokens()
+        )
+        started = time.monotonic()
+        decision = await self._route_decision(body, cost_features=cost_features, policy=policy)
+        router_ms = round((time.monotonic() - started) * 1000, 1)
+        res, usage = await self._complete_once(decision.model_name, body)
+        # Record what the served model actually cached so the next turn's routing knows
+        # this conversation is warm on it.
+        self._cache_ledger.observe(self._config.resolve_model(decision.model_name), cost_features, usage)
+        res["route_reason"] = decision.reason
+        res["router_ms"] = router_ms
+        res["model_ms"] = res["latency_ms"]
+        res["total_ms"] = round(router_ms + res["latency_ms"], 1)
+        return res
+
+    async def _route_decision(
+        self, body: dict, cost_features=None, policy: str | None = None
+    ) -> RouteDecision:
         classifier_input, _ = request_to_classifier_input(body)
         try:
             probabilities = await self._classifier.predict(classifier_input)
@@ -195,7 +236,10 @@ class RouterPipeline:
             return self._default_decision("fallback: router_issue")
         if self._missing_probability_labels(probabilities):
             return self._default_decision("fallback: classifier_label_mismatch")
-        return choose_model(self._config, probabilities)
+        config = self._config if policy is None else self._config.model_copy(update={"policy": policy})
+        return choose_model(
+            config, probabilities, cost_features=cost_features, cache_ledger=self._cache_ledger
+        )
 
     async def _complete_once(self, model_name: str, body: dict) -> dict:
         model = self._config.resolve_model(model_name)
@@ -209,9 +253,11 @@ class RouterPipeline:
             captured["usage"] = usage
             captured["http_status"] = provider_metadata.get("http_status")
 
+        send_body = dict(body)
+        send_body["messages"] = _with_cache_breakpoint(send_body.get("messages") or [])
         started = time.time()
         response = await provider.messages(
-            AnthropicRequest(body=dict(body), headers={}),
+            AnthropicRequest(body=send_body, headers={}),
             model=model,
             context=RequestContext(
                 request_id="demo",
@@ -234,9 +280,11 @@ class RouterPipeline:
             + usage.cache_read_input_tokens
             + usage.cache_creation_input_tokens,
             "output_tokens": usage.output_tokens,
+            "cache_read_tokens": usage.cache_read_input_tokens,
+            "cache_creation_tokens": usage.cache_creation_input_tokens,
             "latency_ms": latency_ms,
             "http_status": status,
-        }
+        }, usage
 
     def _default_decision(self, reason: str) -> RouteDecision:
         return RouteDecision(
@@ -303,6 +351,28 @@ def _header(headers: dict[str, str], name: str) -> str | None:
 
 def _int_or_none(value: object) -> int | None:
     return int(value) if isinstance(value, int) else None
+
+
+def _with_cache_breakpoint(messages: list[dict]) -> list[dict]:
+    """Mark the last message as an ephemeral cache breakpoint so multi-turn chats reuse
+    the conversation prefix. Staying on a model is then a cache read; switching is a cold
+    re-read — the cost difference cache_aware is there to weigh. Applied only on the way
+    to the provider, so routing and the classifier still see the plain messages."""
+    if not messages:
+        return messages
+    out = [dict(m) for m in messages]
+    last = dict(out[-1])
+    content = last.get("content")
+    if isinstance(content, str):
+        last["content"] = [{"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}]
+    elif isinstance(content, list) and content:
+        blocks = [dict(b) if isinstance(b, dict) else {"type": "text", "text": str(b)} for b in content]
+        blocks[-1] = {**blocks[-1], "cache_control": {"type": "ephemeral"}}
+        last["content"] = blocks
+    else:
+        return out
+    out[-1] = last
+    return out
 
 
 def _response_text(response: Response) -> str:

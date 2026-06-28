@@ -1,14 +1,15 @@
 # Demo
 
-A split-screen comparison page for showing routing live: you type a query, and the same
-query is answered two ways side by side — straight Claude Sonnet on the left, the routed
-system on the right (served by whichever model the router picks), with each side's model,
-cost, and latency, plus a running savings tally.
+A split-screen comparison page for showing routing live: you chat, and the same
+conversation runs two ways side by side — straight Claude Sonnet on the left, the routed
+system on the right (each turn served by whichever model the router picks). Each side
+keeps its own history, and a running tally shows cumulative cost and latency, with
+per-turn cost/latency on every message.
 
-It is single-turn and tool-free, so the classifier sees the same shape it was trained on
-and routes typed questions out of the box. Each comparison makes two real model calls, so
-the page sits behind the same auth as the [dashboard](dashboard.md). Demo calls are not
-written to [telemetry](telemetry.md).
+Each turn makes two real model calls, so the page sits behind the same auth as the
+[dashboard](dashboard.md). No conversation is stored server-side — the browser holds the
+in-progress chat, and **New chat** (or a refresh) starts a fresh one, so anyone can walk
+up and begin. Demo calls are not written to [telemetry](telemetry.md).
 
 ## Running it
 
@@ -25,27 +26,30 @@ http://127.0.0.1:8788/demo
 `er demo` requires `demo.enabled` (on by default). If an `auth_key` is set, the URL
 includes it as `?key=...`, the same as the dashboard.
 
+## What you see
+
+- Two chat transcripts, left = Sonnet, right = routed. The same user turns appear in both;
+  the answers diverge.
+- Each assistant message shows its cost and latency. The routed side also shows the chosen
+  model and splits latency into **router** (classifier) time and **model** time —
+  `router 40ms + model 1100ms = 1140ms` — so the router's own overhead is visible.
+- The header shows the cumulative **running cost** (all-Sonnet vs routed, percent saved)
+  and **total latency** across the chat.
+- On a hard turn the routed side may **escalate to Sonnet** (the classifier was not
+  confident in a cheaper model); both sides then match with no savings — which is the
+  point: it only deviates when it pays off.
+
 ## Controls
 
 Both sides always use the **same** settings so the comparison is fair; each provider
 converts them for its own model internally.
 
 - **Reasoning** — `off` / `low` / `medium` / `high`. Sent as the Sonnet-native
-  `output_config.effort`; the gateway maps it per provider (see
-  [thinking](thinking.md)). Default `off`.
-- **Max tokens** — `32k` / `64k`, default `32k`. This is only a ceiling to avoid
-  truncation; cost is computed from the *actual* output, so a higher ceiling does not
-  raise cost on its own.
-- **Presets** — example queries you can click; mix in a genuinely hard one to show the
-  router escalate to Sonnet (both sides then match, with no savings — which is the point).
-
-## What you see
-
-Each side shows the served model, the answer, its cost, and latency. The routed side adds
-a badge for the chosen model and either a savings percentage (it deviated to a cheaper
-model) or an "escalated → sonnet" note (the classifier was not confident enough in a
-cheaper model, so it stayed on the default). A strip at the bottom accumulates the session
-total: all-Sonnet vs routed, and the percentage saved.
+  `output_config.effort`; the gateway maps it per provider (see [thinking](thinking.md)).
+- **Max tokens** — `32k` / `64k`. Only a ceiling to avoid truncation; cost is from the
+  *actual* output, so a higher ceiling does not raise cost on its own.
+- **Presets** — example queries you can click to start; mix in a genuinely hard one to
+  show the router escalate to Sonnet.
 
 ## Config
 
@@ -53,14 +57,13 @@ total: all-Sonnet vs routed, and the percentage saved.
 "demo": { "enabled": true, "streaming": false }
 ```
 
-- `enabled` — mount the demo routes (`/demo`, `/api/demo/compare`). Default `true`.
-- `streaming` — default mode for the page's streaming toggle. Non-streaming returns both
-  answers when ready; streaming renders both token by token.
+- `enabled` — mount the demo routes (`/demo`, `/api/demo/chat`). Default `true`.
+- `streaming` — default mode for the page's streaming toggle (token-by-token rendering).
 
 ## Notes
 
-- The routed side uses the configured routing policy (default `deviate_if_confident`).
-  For a single-turn demo this just picks the cheapest model the classifier is confident
-  about, escalating to the default on hard queries.
-- Because each comparison calls two models, keep `er demo` behind `auth_key` if the
-  gateway is reachable beyond your machine.
+- The routed side uses the configured routing policy. With `cache_aware`, the router also
+  accounts for prompt-cache effects across the multi-turn chat (see
+  [configuration](configuration.md#policy)).
+- Because each turn calls two models, keep `er demo` behind `auth_key` if the gateway is
+  reachable beyond your machine.

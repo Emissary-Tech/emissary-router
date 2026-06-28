@@ -30,7 +30,10 @@ class _FakeProvider:
 
     async def messages(self, request, model, context, on_complete):
         self.bodies.append(request.body)
-        on_complete(Usage(input_tokens=1000, output_tokens=200), {"http_status": 200})
+        on_complete(
+            Usage(input_tokens=1000, output_tokens=200, cache_creation_input_tokens=500),
+            {"http_status": 200},
+        )
         return JSONResponse({"content": [{"type": "text", "text": f"answer:{model.name}"}]})
 
 
@@ -51,9 +54,13 @@ def _pipeline(classifier):
     return pipe
 
 
-def test_compare_routes_to_cheaper_model_and_reports_savings():
+def _turn(text):
+    return [{"role": "user", "content": text}]
+
+
+def test_chat_routes_to_cheaper_model_and_reports_savings():
     pipe = _pipeline(_ConfidentHaiku())
-    result = asyncio.run(pipe.compare("what is a hash map?"))
+    result = asyncio.run(pipe.chat(_turn("what is a hash map?"), _turn("what is a hash map?")))
 
     assert result["baseline_model"] == "claude-sonnet-4.6"
     assert result["baseline"]["model"] == "claude-sonnet-4.6"
@@ -61,22 +68,33 @@ def test_compare_routes_to_cheaper_model_and_reports_savings():
     assert result["routed"]["model"] == "claude-haiku-4.5"
     assert result["routed"]["answer"] == "answer:claude-haiku-4.5"
     assert result["routed"]["route_reason"].startswith("deviate_if_confident")
-    # same tokens, cheaper model -> positive savings
     assert result["baseline"]["cost_usd"] > result["routed"]["cost_usd"] > 0
     assert result["savings_pct"] > 0
 
 
-def test_compare_escalates_to_sonnet_when_not_confident():
+def test_chat_reports_router_and_model_latency_split():
+    pipe = _pipeline(_ConfidentHaiku())
+    result = asyncio.run(pipe.chat(_turn("hi"), _turn("hi")))
+
+    routed = result["routed"]
+    assert routed["router_ms"] >= 0
+    assert routed["total_ms"] >= routed["model_ms"]
+    # baseline has no router step
+    assert result["baseline"]["router_ms"] == 0.0
+    assert result["baseline"]["total_ms"] == result["baseline"]["model_ms"]
+
+
+def test_chat_escalates_to_sonnet_when_not_confident():
     pipe = _pipeline(_Unconfident())
-    result = asyncio.run(pipe.compare("prove sqrt(2) is irrational"))
+    result = asyncio.run(pipe.chat(_turn("prove sqrt(2) is irrational"), _turn("prove sqrt(2) is irrational")))
 
     assert result["routed"]["model"] == "claude-sonnet-4.6"  # same as baseline
     assert result["savings_pct"] == 0
 
 
-def test_compare_applies_same_settings_to_both_sides():
+def test_chat_applies_same_settings_to_both_sides():
     pipe = _pipeline(_ConfidentHaiku())
-    asyncio.run(pipe.compare("hi", max_tokens=64000, effort="high"))
+    asyncio.run(pipe.chat(_turn("hi"), _turn("hi"), max_tokens=64000, effort="high"))
 
     bodies = pipe._providers["anthropic"].bodies
     assert len(bodies) == 2  # baseline + routed, identical settings
@@ -85,69 +103,89 @@ def test_compare_applies_same_settings_to_both_sides():
         assert body["output_config"] == {"effort": "high"}
 
 
+def test_chat_sends_history_with_cache_breakpoint():
+    pipe = _pipeline(_ConfidentHaiku())
+    history = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+        {"role": "user", "content": "and now?"},
+    ]
+    asyncio.run(pipe.chat(history, history))
+    for body in pipe._providers["anthropic"].bodies:
+        msgs = body["messages"]
+        assert len(msgs) == 3
+        assert msgs[0] == {"role": "user", "content": "hi"}  # earlier turns untouched
+        # the last message carries an ephemeral cache breakpoint
+        assert msgs[-1]["content"][0]["text"] == "and now?"
+        assert msgs[-1]["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_chat_observes_served_model_into_ledger():
+    pipe = _pipeline(_ConfidentHaiku())
+    result = asyncio.run(pipe.chat(_turn("hi"), _turn("hi"), session_id="s1", policy="cache_aware"))
+    assert result["routed"]["model"] == "claude-haiku-4.5"
+    # the served model's cache was recorded for this session, so next turn can route warm
+    assert len(pipe._cache_ledger._entries) == 1
+
+
 class _RecordingPipeline:
     def __init__(self):
         self.kwargs = None
 
-    async def compare(self, query, max_tokens=32000, effort=None):
-        self.kwargs = {"query": query, "max_tokens": max_tokens, "effort": effort}
+    async def chat(self, baseline, routed, session_id=None, max_tokens=32000, effort=None, policy=None):
+        self.kwargs = {"baseline": baseline, "routed": routed, "session_id": session_id,
+                       "max_tokens": max_tokens, "effort": effort, "policy": policy}
         return {
-            "query": query, "baseline_model": "claude-sonnet-4.6",
-            "baseline": {"model": "claude-sonnet-4.6", "answer": "a", "cost_usd": 0.002, "latency_ms": 10},
-            "routed": {"model": "claude-haiku-4.5", "answer": "b", "cost_usd": 0.0007, "latency_ms": 8,
-                       "route_reason": "deviate_if_confident:p>=0.8"},
-            "savings_pct": 65,
-        }
-
-
-def test_compare_endpoint_passes_effort_and_clamps_max_tokens():
-    app = FastAPI()
-    app.include_router(build_demo_router(auth_key=None))
-    rec = _RecordingPipeline()
-    app.state.pipeline = rec
-    client = TestClient(app)
-
-    client.post("/api/demo/compare", json={"query": "hi", "effort": "medium", "max_tokens": 64000})
-    assert rec.kwargs["effort"] == "medium"
-    assert rec.kwargs["max_tokens"] == 64000
-
-    # invalid effort dropped, oversized max_tokens clamped to the ceiling
-    client.post("/api/demo/compare", json={"query": "hi", "effort": "bogus", "max_tokens": 999999})
-    assert rec.kwargs["effort"] is None
-    assert rec.kwargs["max_tokens"] == 64000
-
-
-class _StubPipeline:
-    async def compare(self, query, max_tokens=32000, effort=None):
-        return {
-            "query": query,
             "baseline_model": "claude-sonnet-4.6",
-            "baseline": {"model": "claude-sonnet-4.6", "answer": "a", "cost_usd": 0.002, "latency_ms": 10},
-            "routed": {"model": "claude-haiku-4.5", "answer": "b", "cost_usd": 0.0007, "latency_ms": 8,
+            "baseline": {"model": "claude-sonnet-4.6", "answer": "a", "cost_usd": 0.002,
+                         "router_ms": 0.0, "model_ms": 10, "total_ms": 10},
+            "routed": {"model": "claude-haiku-4.5", "answer": "b", "cost_usd": 0.0007,
+                       "router_ms": 2, "model_ms": 8, "total_ms": 10,
                        "route_reason": "deviate_if_confident:p>=0.8"},
             "savings_pct": 65,
         }
 
 
-def _client():
+def _client(pipeline=None):
     app = FastAPI()
     app.include_router(build_demo_router(auth_key=None, streaming_default=False))
-    app.state.pipeline = _StubPipeline()
+    app.state.pipeline = pipeline or _RecordingPipeline()
     return TestClient(app)
 
 
 def test_demo_page_served():
     body = _client().get("/demo").text
     assert "Emissary routed" in body
-    assert "/api/demo/compare" in body
+    assert "/api/demo/chat" in body
 
 
-def test_compare_endpoint_returns_result():
-    resp = _client().post("/api/demo/compare", json={"query": "hi"})
+def test_chat_endpoint_returns_result():
+    resp = _client().post("/api/demo/chat", json={"baseline": [{"role": "user", "content": "hi"}],
+                                                  "routed": [{"role": "user", "content": "hi"}]})
     assert resp.status_code == 200
     assert resp.json()["savings_pct"] == 65
 
 
-def test_compare_endpoint_rejects_empty_query():
-    resp = _client().post("/api/demo/compare", json={"query": "   "})
-    assert resp.status_code == 400
+def test_chat_endpoint_rejects_missing_messages():
+    assert _client().post("/api/demo/chat", json={"baseline": [], "routed": []}).status_code == 400
+    assert _client().post("/api/demo/chat", json={"routed": [{"role": "user", "content": "hi"}]}).status_code == 400
+
+
+def test_chat_endpoint_passes_options():
+    rec = _RecordingPipeline()
+    client = _client(rec)
+    msg = [{"role": "user", "content": "hi"}]
+
+    client.post("/api/demo/chat", json={"baseline": msg, "routed": msg, "effort": "medium",
+                                        "max_tokens": 64000, "policy": "cache_aware", "session_id": "s1"})
+    assert rec.kwargs["effort"] == "medium"
+    assert rec.kwargs["max_tokens"] == 64000
+    assert rec.kwargs["policy"] == "cache_aware"
+    assert rec.kwargs["session_id"] == "s1"
+
+    # invalid effort/policy dropped, oversized max_tokens clamped to the ceiling
+    client.post("/api/demo/chat", json={"baseline": msg, "routed": msg, "effort": "bogus",
+                                        "max_tokens": 999999, "policy": "bogus"})
+    assert rec.kwargs["effort"] is None
+    assert rec.kwargs["policy"] is None
+    assert rec.kwargs["max_tokens"] == 64000
