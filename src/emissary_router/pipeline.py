@@ -6,6 +6,7 @@ import logging
 import os
 import time
 import uuid
+from datetime import datetime
 
 import httpx
 from starlette.responses import JSONResponse, Response
@@ -186,8 +187,14 @@ class RouterPipeline:
             "savings_pct": savings_pct,
         }
 
-    def _demo_body(self, messages: list[dict], max_tokens: int, effort: str | None) -> dict:
-        body: dict = {"messages": messages, "max_tokens": max_tokens}
+    def _demo_body(
+        self, messages: list[dict], max_tokens: int, effort: str | None, with_search: bool = False
+    ) -> dict:
+        body: dict = {
+            "system": _demo_system(with_search),
+            "messages": messages,
+            "max_tokens": max_tokens,
+        }
         if effort:
             body["output_config"] = {"effort": effort}
         return body
@@ -331,7 +338,7 @@ class RouterPipeline:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _stream_routed(self, messages, max_tokens, effort, session_id, policy, tools=None):
-        body = self._demo_body(messages, max_tokens, effort)
+        body = self._demo_body(messages, max_tokens, effort, with_search=bool(tools))
         headers = {SESSION_HEADER: session_id} if session_id else {}
         cost_features = extract_request_cost_features(
             body, headers, self._cache_ledger.expected_output_tokens()
@@ -368,7 +375,7 @@ class RouterPipeline:
         started = time.time()
 
         for _ in range(_AGENT_MAX_ROUNDS):
-            send_body = self._demo_body(convo, max_tokens, effort)
+            send_body = self._demo_body(convo, max_tokens, effort, with_search=bool(tools))
             send_body["messages"] = _with_cache_breakpoint(send_body["messages"])
             send_body["stream"] = True
             if tools:
@@ -513,6 +520,36 @@ def _header(headers: dict[str, str], name: str) -> str | None:
 
 def _int_or_none(value: object) -> int | None:
     return int(value) if isinstance(value, int) else None
+
+
+def _demo_system(with_search: bool) -> str:
+    """Demo system prompt — applied identically to both sides. Honest (no impersonation),
+    minimal, with today's real date (so models don't treat the present as the future) and
+    an anti-fabrication rule. The web-search block is included only when search is on."""
+    lines = [
+        "You are a helpful, knowledgeable assistant.",
+        "",
+        f"Current date: {datetime.now().strftime('%Y-%m-%d')}",
+        "",
+        "# Guidelines",
+        "- Be accurate, clear, and concise.",
+        "- If you are unsure or lack the information, say so plainly — never fabricate "
+        "specifics (names, numbers, dates, results).",
+        "- Use Markdown (headings, lists, tables, code blocks) to structure longer "
+        "answers when it improves clarity.",
+    ]
+    if with_search:
+        lines += [
+            "",
+            "# Tools",
+            "## web_search",
+            "Use the `web_search` tool whenever the question involves current events, "
+            "recent or time-sensitive facts, or specifics you cannot verify from memory. "
+            "Base your answer on what the search returns rather than prior assumptions — "
+            "if the results conflict with what you remember, trust the results, since "
+            "your training data may be out of date.",
+        ]
+    return "\n".join(lines)
 
 
 def _parse_sse_event(line: str) -> dict | None:

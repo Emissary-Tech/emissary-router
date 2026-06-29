@@ -67,6 +67,10 @@ converts them for its own model internally.
 
 ## Notes
 
+- Both sides get the same small system prompt — today's date (so the present isn't
+  treated as the future), an anti-fabrication rule, and, when search is on, an
+  instruction to ground answers in the search results over prior assumptions. It does
+  not impersonate any product, and it does not affect routing.
 - The routed side uses the configured routing policy. With `cache_aware`, the router also
   accounts for prompt-cache effects across the multi-turn chat (see
   [configuration](configuration.md#policy)).

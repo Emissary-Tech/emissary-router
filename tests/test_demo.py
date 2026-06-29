@@ -93,6 +93,25 @@ def test_chat_escalates_to_sonnet_when_not_confident():
     assert result["savings_pct"] == 0
 
 
+def test_demo_system_prompt_has_date_and_conditional_search():
+    from emissary_router.pipeline import _demo_system
+    base = _demo_system(with_search=False)
+    assert "Current date:" in base
+    assert "fabricate" in base
+    assert "web_search" not in base  # no tools block without search
+    searched = _demo_system(with_search=True)
+    assert "web_search" in searched
+    assert "trust the results" in searched
+
+
+def test_chat_includes_dated_system_prompt():
+    pipe = _pipeline(_ConfidentHaiku())
+    asyncio.run(pipe.chat(_turn("hi"), _turn("hi")))
+    for body in pipe._providers["anthropic"].bodies:
+        assert "Current date:" in body["system"]
+        assert "web_search" not in body["system"]  # chat path has no search block
+
+
 def test_chat_applies_same_settings_to_both_sides():
     pipe = _pipeline(_ConfidentHaiku())
     asyncio.run(pipe.chat(_turn("hi"), _turn("hi"), max_tokens=64000, effort="high"))
