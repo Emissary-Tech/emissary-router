@@ -159,6 +159,8 @@ _PAGE = """<!doctype html>
   .opts { display:flex; gap:18px; align-items:center; margin-top:10px; font-size:13px; color:var(--muted); }
   .opts label { display:flex; align-items:center; gap:6px; }
   .opts select { background:#0f1115; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:4px 6px; font:inherit; }
+  .gearlink { position:fixed; right:16px; bottom:14px; background:var(--panel); border:1px solid var(--line); color:var(--muted); border-radius:999px; padding:7px 14px; font-size:13px; text-decoration:none; }
+  .gearlink:hover { color:var(--fg); border-color:var(--accent); }
 </style>
 </head>
 <body>
@@ -217,6 +219,7 @@ _PAGE = """<!doctype html>
     <span>both sides use the same settings; converted per model</span>
   </div>
 </main>
+<a class="gearlink" id="gear" href="/dashboard">⚙ Settings</a>
 <script>
 const $ = (id) => document.getElementById(id);
 const KEY = new URLSearchParams(location.search).get("key");
@@ -357,6 +360,7 @@ $("send").onclick = send;
 $("q").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
 $("newchat").onclick = newChat;
 document.querySelectorAll(".chip").forEach((c) => c.onclick = () => { $("q").value = c.dataset.q; send(); });
+$("gear").href = "/dashboard" + (KEY ? "?key=" + encodeURIComponent(KEY) : "") + "#settings";
 </script>
 </body>
 </html>

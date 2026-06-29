@@ -270,7 +270,9 @@ document.getElementById("refresh").onclick = () => {
   const active = document.querySelector(".tab.active");
   if (active) renderers[active.dataset.view]();
 };
-renderSavings();
+const initView = (location.hash || "").replace("#", "");
+const initTab = initView && document.querySelector('.tab[data-view="' + initView + '"]');
+if (initTab) initTab.click(); else renderSavings();
 </script>
 </body>
 </html>
