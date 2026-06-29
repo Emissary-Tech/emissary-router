@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 
 from fastapi import APIRouter, Body, Depends, Request
 from starlette.responses import HTMLResponse, JSONResponse, StreamingResponse
 
+from emissary_router.config import read_env_file, user_env_path, write_env_file
 from emissary_router.dashboard.routes import _make_auth_dependency
 
 
@@ -48,7 +50,37 @@ def build_demo_router(auth_key: str | None = None, streaming_default: bool = Fal
 
         return StreamingResponse(events(), media_type="text/event-stream")
 
+    @router.get("/api/demo/search-key")
+    async def get_search_key() -> JSONResponse:
+        key = os.environ.get("TAVILY_API_KEY", "")
+        return JSONResponse({"set": bool(key), "hint": _key_hint(key)})
+
+    @router.put("/api/demo/search-key")
+    async def set_search_key(payload: dict = Body(...)) -> JSONResponse:
+        key = (payload.get("key") or "").strip()
+        if not key:
+            return JSONResponse({"error": "empty key"}, status_code=400)
+        if len(key) > 200 or any(c in key for c in "\"'\n\r"):
+            return JSONResponse({"error": "invalid key"}, status_code=400)
+        try:
+            # Stored in .env (chmod 600), never in config.json — keeps keys out of the
+            # forkable config. Applied to the running process immediately.
+            path = user_env_path()
+            values = read_env_file(path)
+            values["TAVILY_API_KEY"] = key
+            write_env_file(path, values)
+            os.environ["TAVILY_API_KEY"] = key
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+        return JSONResponse({"set": True, "hint": _key_hint(key)})
+
     return router
+
+
+def _key_hint(key: str) -> str:
+    if not key:
+        return ""
+    return "••••" + key[-4:] if len(key) >= 4 else "••••"
 
 
 def _parse_payload(payload: dict) -> tuple[dict | None, str | None]:
@@ -161,6 +193,8 @@ _PAGE = """<!doctype html>
   .opts select { background:#0f1115; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:4px 6px; font:inherit; }
   .gearlink { position:fixed; right:16px; bottom:14px; background:var(--panel); border:1px solid var(--line); color:var(--muted); border-radius:999px; padding:7px 14px; font-size:13px; text-decoration:none; }
   .gearlink:hover { color:var(--fg); border-color:var(--accent); }
+  .keyrow { display:flex; gap:10px; align-items:center; margin-top:10px; font-size:13px; color:var(--muted); }
+  .keyrow input { background:#0f1115; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:5px 8px; font:inherit; width:170px; }
 </style>
 </head>
 <body>
@@ -217,6 +251,12 @@ _PAGE = """<!doctype html>
     <label><input type="checkbox" id="stream" __STREAM_CHECKED__/> Stream</label>
     <label><input type="checkbox" id="search" /> Web search</label>
     <span>both sides use the same settings; converted per model</span>
+  </div>
+  <div class="keyrow">
+    <span>Web search key (Tavily)</span>
+    <input type="password" id="tavily" placeholder="paste key" autocomplete="off" />
+    <button class="iconbtn" id="savekey">Save</button>
+    <span id="keystat"></span>
   </div>
 </main>
 <a class="gearlink" id="gear" href="/dashboard">⚙ Settings</a>
@@ -361,6 +401,22 @@ $("q").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
 $("newchat").onclick = newChat;
 document.querySelectorAll(".chip").forEach((c) => c.onclick = () => { $("q").value = c.dataset.q; send(); });
 $("gear").href = "/dashboard" + (KEY ? "?key=" + encodeURIComponent(KEY) : "") + "#settings";
+
+async function loadKey() {
+  try {
+    const j = await (await fetch("/api/demo/search-key", { headers: hdrs() })).json();
+    $("keystat").textContent = j.set ? ("key set " + j.hint) : "no key — search uses mock results";
+  } catch (_) {}
+}
+$("savekey").onclick = async () => {
+  const k = $("tavily").value.trim();
+  if (!k) return;
+  const r = await fetch("/api/demo/search-key", { method: "PUT", headers: hdrs(), body: JSON.stringify({ key: k }) });
+  const j = await r.json();
+  if (r.ok) { $("tavily").value = ""; $("keystat").textContent = "key set " + j.hint; }
+  else $("keystat").textContent = "error: " + (j.error || r.status);
+};
+loadKey();
 </script>
 </body>
 </html>

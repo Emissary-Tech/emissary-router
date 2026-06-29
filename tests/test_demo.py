@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -274,6 +275,33 @@ def test_chat_endpoint_returns_result():
                                                   "routed": [{"role": "user", "content": "hi"}]})
     assert resp.status_code == 200
     assert resp.json()["savings_pct"] == 65
+
+
+def test_set_search_key_writes_env_and_masks(tmp_path, monkeypatch):
+    monkeypatch.setenv("EMISSARY_ROUTER_HOME", str(tmp_path))
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    client = _client()
+
+    r = client.put("/api/demo/search-key", json={"key": "tvly-abcd1234"})
+    assert r.status_code == 200
+    assert r.json()["set"] is True
+    assert r.json()["hint"].endswith("1234")
+    assert "tvly-abcd1234" not in r.json()["hint"]  # never echo the full key
+
+    assert os.environ["TAVILY_API_KEY"] == "tvly-abcd1234"  # applied live
+    env_text = (tmp_path / ".env").read_text()
+    assert "TAVILY_API_KEY=tvly-abcd1234" in env_text  # persisted to .env, not config
+
+    got = client.get("/api/demo/search-key").json()
+    assert got["set"] is True
+    assert "tvly-abcd1234" not in got["hint"]
+
+
+def test_set_search_key_rejects_empty_and_invalid(tmp_path, monkeypatch):
+    monkeypatch.setenv("EMISSARY_ROUTER_HOME", str(tmp_path))
+    client = _client()
+    assert client.put("/api/demo/search-key", json={"key": ""}).status_code == 400
+    assert client.put("/api/demo/search-key", json={"key": "bad\nkey"}).status_code == 400
 
 
 def test_chat_endpoint_rejects_missing_messages():
