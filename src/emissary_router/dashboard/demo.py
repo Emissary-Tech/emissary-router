@@ -124,9 +124,10 @@ def _clamp_int(value, default: int, lo: int, hi: int) -> int:
 
 PRESETS = [
     "What's the difference between TCP and UDP?",
-    "Summarize what a hash map is in two sentences.",
+    'On an island, A says "B is a liar," B says "C is a liar," C says "A and B are both liars." Who tells the truth?',
+    "Two quantum states with energies E1 and E2 have lifetimes 10⁻⁹ s and 10⁻⁸ s. What energy difference lets them be clearly resolved?",
     "Find the median of two sorted arrays in O(log(m+n)) time, with code and a correctness argument.",
-    "Prove that the square root of 2 is irrational.",
+    "Prove that 7 divides 3^(2n+1) + 2^(n+2) for every positive integer n.",
 ]
 
 
