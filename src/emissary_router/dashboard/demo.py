@@ -27,8 +27,13 @@ def build_demo_router(auth_key: str | None = None) -> APIRouter:
         args, error = _parse_payload(payload)
         if error:
             return JSONResponse({"error": error}, status_code=400)
+        side = payload.get("side")
         try:
-            result = await request.app.state.pipeline.chat(**args)
+            pipeline = request.app.state.pipeline
+            if side in ("baseline", "routed"):
+                result = await pipeline.chat_side(side, **args)  # one side, rendered as soon as it's done
+            else:
+                result = await pipeline.chat(**args)
         except Exception as exc:  # surface upstream/key issues to the page instead of 500-ing silently
             return JSONResponse({"error": str(exc)}, status_code=502)
         return JSONResponse(result)
@@ -222,7 +227,6 @@ _PAGE = """<!doctype html>
   <h1>Emissary Router</h1>
   <span class="sub">default Sonnet vs routed — same chat, side by side</span>
   <span class="grow"></span>
-  <span class="sub" id="t-turns">new chat</span>
   <button class="iconbtn" id="newchat">New chat</button>
 </header>
 <main>
@@ -368,15 +372,15 @@ function updateTotals(j) {
     usd(rCost) + '</span> · <span class="save">saved ' + pct + "%</span>";
   $("t-lat").innerHTML = 'sonnet <span class="mono">' + (cLat / 1000).toFixed(1) + 's</span> · routed <span class="mono">' +
     (rLat / 1000).toFixed(1) + "s</span>";
-  $("t-turns").textContent = turns + " turn" + (turns === 1 ? "" : "s");
 }
 
 const hdrs = () => { const h = { "content-type": "application/json" }; if (KEY) h["x-api-key"] = KEY; return h; };
-const reqBody = () => JSON.stringify({
+const hdrsBody = (side) => JSON.stringify({
   baseline: baselineMsgs, routed: routedMsgs, session_id: sessionId,
   policy: $("policy").value, max_tokens: parseInt($("maxtok").value, 10),
-  effort: $("effort").value || null, search: $("search").checked,
+  effort: $("effort").value || null, search: $("search").checked, side,
 });
+const reqBody = () => hdrsBody(undefined);
 
 async function fetchT(url, opts, ms) {
   const ctrl = new AbortController();
@@ -385,15 +389,28 @@ async function fetchT(url, opts, ms) {
   finally { clearTimeout(t); }
 }
 
-async function onceTurn(bSlot, rSlot) {
-  const r = await fetchT("/api/demo/chat", { method: "POST", headers: hdrs(), body: reqBody() }, 180000);
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.error || r.status);
-  fill(bSlot, j.baseline, false);
-  fill(rSlot, j.routed, true);
-  baselineMsgs.push({ role: "assistant", content: j.baseline.answer || "" });
-  routedMsgs.push({ role: "assistant", content: j.routed.answer || "" });
-  updateTotals(j);
+async function twoSidedTurn(bSlot, rSlot) {
+  // Fire each side as its own request and render whichever finishes first.
+  const res = {};
+  async function one(name, slot, routed) {
+    try {
+      const r = await fetchT("/api/demo/chat", { method: "POST", headers: hdrs(), body: hdrsBody(name) }, 180000);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || r.status);
+      res[name] = j;
+      fill(slot, j, routed);  // show this side immediately, don't wait for the other
+    } catch (e) {
+      slot.bub.textContent = "Error: " + (e && e.name === "AbortError" ? "timed out" : (e && e.message ? e.message : e));
+    }
+  }
+  await Promise.all([one("baseline", bSlot, false), one("routed", rSlot, true)]);
+  if (res.baseline && res.routed) {
+    baselineMsgs.push({ role: "assistant", content: res.baseline.answer || "" });
+    routedMsgs.push({ role: "assistant", content: res.routed.answer || "" });
+    updateTotals({ baseline: res.baseline, routed: res.routed });
+  } else {
+    baselineMsgs.pop(); routedMsgs.pop();  // a side failed — roll back the user turn
+  }
 }
 
 async function streamTurn(bSlot, rSlot) {
@@ -455,7 +472,7 @@ async function send() {
     bSlot = bubble("pane-base", "asst", "…");
     rSlot = bubble("pane-routed", "asst", "…");
     if ($("search").checked) await streamTurn(bSlot, rSlot);  // search uses the agent/tool loop
-    else await onceTurn(bSlot, rSlot);
+    else await twoSidedTurn(bSlot, rSlot);
   } catch (e) {
     const msg = (e && e.name === "AbortError") ? "timed out" : (e && e.message ? e.message : e);
     if (bSlot) bSlot.bub.textContent = "Error: " + msg;
@@ -472,7 +489,7 @@ function newChat() {
   cCost = rCost = cLat = rLat = turns = 0;
   sessionId = newId();  // fresh cache-ledger scope, so policy comparisons start clean
   $("pane-base").innerHTML = ""; $("pane-routed").innerHTML = "";
-  $("t-cost").textContent = "—"; $("t-lat").textContent = "—"; $("t-turns").textContent = "new chat";
+  $("t-cost").textContent = "—"; $("t-lat").textContent = "—";
 }
 
 $("send").onclick = send;

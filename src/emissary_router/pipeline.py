@@ -191,6 +191,22 @@ class RouterPipeline:
             "savings_pct": savings_pct,
         }
 
+    async def chat_side(
+        self,
+        side: str,
+        baseline_messages: list[dict],
+        routed_messages: list[dict],
+        session_id: str | None = None,
+        max_tokens: int = 32000,
+        effort: str | None = None,
+        policy: str | None = None,
+    ) -> dict:
+        """Run just one side of a turn, so the page can fire both independently and render
+        whichever finishes first. `side` is "baseline" (straight Sonnet) or "routed"."""
+        if side == "baseline":
+            return await self._run_side(BASELINE_MODEL, baseline_messages, max_tokens, effort)
+        return await self._route_and_run(routed_messages, max_tokens, effort, session_id, policy)
+
     def _demo_body(
         self, messages: list[dict], max_tokens: int, effort: str | None, with_search: bool = False
     ) -> dict:

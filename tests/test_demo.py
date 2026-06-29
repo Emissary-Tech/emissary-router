@@ -93,6 +93,16 @@ def test_chat_escalates_to_sonnet_when_not_confident():
     assert result["savings_pct"] == 0
 
 
+def test_chat_side_runs_only_one_side():
+    pipe = _pipeline(_ConfidentHaiku())
+    base = asyncio.run(pipe.chat_side("baseline", _turn("hi"), _turn("hi")))
+    routed = asyncio.run(pipe.chat_side("routed", _turn("hi"), _turn("hi"), session_id="s1", policy="cache_aware"))
+    assert base["model"] == "claude-sonnet-4.6"
+    assert base["router_ms"] == 0.0
+    assert routed["model"] == "claude-haiku-4.5"
+    assert routed["route_reason"]  # routed side carries the routing reason
+
+
 def test_demo_system_prompt_has_date_and_conditional_search():
     from emissary_router.pipeline import _demo_system
     base = _demo_system(with_search=False)
@@ -297,6 +307,12 @@ class _RecordingPipeline:
             "savings_pct": 65,
         }
 
+    async def chat_side(self, side, baseline_messages, routed_messages, session_id=None, max_tokens=32000, effort=None, policy=None):
+        self.kwargs = {"side": side, "baseline": baseline_messages, "routed": routed_messages,
+                       "session_id": session_id, "max_tokens": max_tokens, "effort": effort, "policy": policy}
+        model = "claude-sonnet-4.6" if side == "baseline" else "claude-haiku-4.5"
+        return {"model": model, "answer": side, "cost_usd": 0.001, "router_ms": 0, "model_ms": 5, "total_ms": 5}
+
 
 def _client(pipeline=None):
     app = FastAPI()
@@ -316,6 +332,16 @@ def test_chat_endpoint_returns_result():
                                                   "routed": [{"role": "user", "content": "hi"}]})
     assert resp.status_code == 200
     assert resp.json()["savings_pct"] == 65
+
+
+def test_chat_endpoint_side_runs_one_side():
+    rec = _RecordingPipeline()
+    client = _client(rec)
+    msg = [{"role": "user", "content": "hi"}]
+    resp = client.post("/api/demo/chat", json={"baseline": msg, "routed": msg, "side": "baseline"})
+    assert resp.status_code == 200
+    assert resp.json()["model"] == "claude-sonnet-4.6"  # one side only, no baseline/routed wrapper
+    assert rec.kwargs["side"] == "baseline"
 
 
 def test_set_search_key_writes_env_and_masks(tmp_path, monkeypatch):
