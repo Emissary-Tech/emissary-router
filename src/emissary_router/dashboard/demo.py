@@ -175,6 +175,16 @@ _PAGE = """<!doctype html>
   .msg { margin-bottom:12px; display:flex; flex-direction:column; }
   .msg.user { align-items:flex-end; }
   .bub { max-width:88%; white-space:pre-wrap; border-radius:12px; padding:9px 12px; font-size:14px; }
+  .bub.md { white-space:normal; }
+  .bub strong { font-weight:500; color:#fff; }
+  .bub em { font-style:italic; }
+  .bub code { background:#11151c; padding:1px 5px; border-radius:4px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px; }
+  .bub pre { background:#11151c; padding:8px 10px; border-radius:6px; overflow-x:auto; margin:6px 0; }
+  .bub pre code { background:none; padding:0; }
+  .bub ul, .bub ol { margin:6px 0; padding-left:20px; }
+  .bub li { margin:2px 0; }
+  .bub h3, .bub h4 { font-size:14px; font-weight:500; margin:8px 0 4px; }
+  .bub a { color:var(--accent); }
   .msg.user .bub { background:#23314d; color:#dbe6ff; }
   .msg.asst .bub { background:#1b1f28; color:#d6dae6; }
   .bfoot { font-size:11.5px; color:var(--muted); margin-top:4px; }
@@ -267,6 +277,24 @@ const usd = (v) => "$" + Number(v || 0).toFixed(4);
 const ms = (v) => Math.round(Number(v || 0)) + "ms";
 const short = (m) => m.replace("claude-", "").replace("-4.6", "").replace("-4.5", "");
 
+const mdEsc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+function md(src) {
+  const cb = [];
+  let s = String(src).replace(/```([\\s\\S]*?)```/g, (_, c) => { cb.push("<pre><code>" + mdEsc(c.replace(/^\\n/, "")) + "</code></pre>"); return "%%CB" + (cb.length - 1) + "%%"; });
+  s = mdEsc(s);
+  s = s.replace(/`([^`]+)`/g, (_, c) => "<code>" + c + "</code>");
+  s = s.replace(/\\*\\*([^*]+)\\*\\*/g, "<strong>$1</strong>");
+  s = s.replace(/(^|[^*])\\*([^*\\n]+)\\*/g, "$1<em>$2</em>");
+  s = s.replace(/\\[([^\\]]+)\\]\\((https?:[^\\s)]+)\\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  s = s.replace(/^###\\s+(.+)$/gm, "<h4>$1</h4>").replace(/^##\\s+(.+)$/gm, "<h3>$1</h3>").replace(/^#\\s+(.+)$/gm, "<h3>$1</h3>");
+  s = s.replace(/(?:^|\\n)((?:[-*]\\s+.+(?:\\n|$))+)/g, (_, it) => "<ul>" + it.trim().split(/\\n/).map((l) => "<li>" + l.replace(/^[-*]\\s+/, "") + "</li>").join("") + "</ul>");
+  s = s.replace(/(?:^|\\n)((?:\\d+\\.\\s+.+(?:\\n|$))+)/g, (_, it) => "<ol>" + it.trim().split(/\\n/).map((l) => "<li>" + l.replace(/^\\d+\\.\\s+/, "") + "</li>").join("") + "</ol>");
+  s = s.replace(/\\n{2,}/g, "<br><br>").replace(/\\n/g, "<br>");
+  s = s.replace(/%%CB(\\d+)%%/g, (_, i) => cb[+i]);
+  return s;
+}
+function renderMd(bub, text) { bub.className = "bub md"; bub.innerHTML = md(text); }
+
 const baselineMsgs = [], routedMsgs = [];
 let cCost = 0, rCost = 0, cLat = 0, rLat = 0, turns = 0;
 const newId = () => (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : "s-" + Date.now() + "-" + (turns);
@@ -289,7 +317,10 @@ function bubble(paneId, role, text) {
 }
 
 function fill(slot, d, routed, keepText) {
-  if (!keepText) slot.bub.textContent = d.error ? ("Error: " + d.error) : (d.answer || "(no text)");
+  if (!keepText) {
+    if (d.error) slot.bub.textContent = "Error: " + d.error;
+    else renderMd(slot.bub, d.answer || "(no text)");
+  }
   const sx = d.searches ? ' · 🔎 ' + d.searches : "";
   if (routed) {
     slot.foot.innerHTML = '<span class="badge">' + short(d.model) + "</span> " + usd(d.cost_usd) +
@@ -352,7 +383,7 @@ async function streamTurn(bSlot, rSlot) {
       if (!slot) continue;
       if (ev.type === "delta") {
         if (!acc[ev.side]) slot.bub.textContent = "";
-        acc[ev.side] += ev.text; slot.bub.textContent = acc[ev.side];
+        acc[ev.side] += ev.text; renderMd(slot.bub, acc[ev.side]);
         slot.pane.scrollTop = slot.pane.scrollHeight;
       } else if (ev.type === "tool") {
         slot.foot.textContent = "🔎 searching: " + (ev.query || "");
