@@ -48,6 +48,11 @@ converts them for its own model internally.
   `output_config.effort`; the gateway maps it per provider (see [thinking](thinking.md)).
 - **Max tokens** — `32k` / `64k`. Only a ceiling to avoid truncation; cost is from the
   *actual* output, so a higher ceiling does not raise cost on its own.
+- **Stream** — render both answers token by token (default from `demo.streaming`).
+- **Web search** — give both sides a `web_search` tool and run a tool loop: the model can
+  search before answering (a `🔎 searching` indicator shows mid-stream), looping until it
+  answers. Search uses [Tavily](https://tavily.com) when `TAVILY_API_KEY` is set, and a
+  mock result otherwise so the demo still runs offline. Enabling search forces streaming.
 - **Presets** — example queries you can click to start; mix in a genuinely hard one to
   show the router escalate to Sonnet.
 

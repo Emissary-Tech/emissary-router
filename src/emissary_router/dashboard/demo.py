@@ -37,10 +37,11 @@ def build_demo_router(auth_key: str | None = None, streaming_default: bool = Fal
         if error:
             return JSONResponse({"error": error}, status_code=400)
         pipeline = request.app.state.pipeline
+        search = bool(payload.get("search"))
 
         async def events():
             try:
-                async for ev in pipeline.stream_chat(**args):
+                async for ev in pipeline.stream_chat(**args, search=search):
                     yield "data: " + json.dumps(ev) + "\n\n"
             except Exception as exc:
                 yield "data: " + json.dumps({"type": "fatal", "error": str(exc)}) + "\n\n"
@@ -212,6 +213,7 @@ _PAGE = """<!doctype html>
       </select>
     </label>
     <label><input type="checkbox" id="stream" __STREAM_CHECKED__/> Stream</label>
+    <label><input type="checkbox" id="search" /> Web search</label>
     <span>both sides use the same settings; converted per model</span>
   </div>
 </main>
@@ -245,12 +247,13 @@ function bubble(paneId, role, text) {
 
 function fill(slot, d, routed, keepText) {
   if (!keepText) slot.bub.textContent = d.error ? ("Error: " + d.error) : (d.answer || "(no text)");
+  const sx = d.searches ? ' · 🔎 ' + d.searches : "";
   if (routed) {
     slot.foot.innerHTML = '<span class="badge">' + short(d.model) + "</span> " + usd(d.cost_usd) +
       ' · <span class="mono">router ' + ms(d.router_ms) + " + model " + ms(d.model_ms) +
-      " = " + ms(d.total_ms) + "</span>";
+      " = " + ms(d.total_ms) + "</span>" + sx;
   } else {
-    slot.foot.innerHTML = usd(d.cost_usd) + ' · <span class="mono">' + ms(d.total_ms) + "</span>";
+    slot.foot.innerHTML = usd(d.cost_usd) + ' · <span class="mono">' + ms(d.total_ms) + "</span>" + sx;
   }
   slot.pane.scrollTop = slot.pane.scrollHeight;
 }
@@ -269,7 +272,8 @@ function updateTotals(j) {
 const hdrs = () => { const h = { "content-type": "application/json" }; if (KEY) h["x-api-key"] = KEY; return h; };
 const reqBody = () => JSON.stringify({
   baseline: baselineMsgs, routed: routedMsgs, session_id: sessionId,
-  policy: $("policy").value, max_tokens: parseInt($("maxtok").value, 10), effort: $("effort").value || null,
+  policy: $("policy").value, max_tokens: parseInt($("maxtok").value, 10),
+  effort: $("effort").value || null, search: $("search").checked,
 });
 
 async function onceTurn(bSlot, rSlot) {
@@ -307,6 +311,8 @@ async function streamTurn(bSlot, rSlot) {
         if (!acc[ev.side]) slot.bub.textContent = "";
         acc[ev.side] += ev.text; slot.bub.textContent = acc[ev.side];
         slot.pane.scrollTop = slot.pane.scrollHeight;
+      } else if (ev.type === "tool") {
+        slot.foot.textContent = "🔎 searching: " + (ev.query || "");
       } else if (ev.type === "done") {
         fin[ev.side] = ev;
         fill(slot, { ...ev, answer: acc[ev.side] || ev.answer }, ev.side === "routed", true);
@@ -328,7 +334,7 @@ async function send() {
   const bSlot = bubble("pane-base", "asst", "…");
   const rSlot = bubble("pane-routed", "asst", "…");
   try {
-    if ($("stream").checked) await streamTurn(bSlot, rSlot);
+    if ($("stream").checked || $("search").checked) await streamTurn(bSlot, rSlot);
     else await onceTurn(bSlot, rSlot);
   } catch (e) {
     bSlot.bub.textContent = "Error: " + e.message;

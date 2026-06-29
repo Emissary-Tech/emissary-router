@@ -10,6 +10,7 @@ import uuid
 import httpx
 from starlette.responses import JSONResponse, Response
 
+from emissary_router import demo_search
 from emissary_router.caching.ledger import CacheLedger
 from emissary_router.caching.usage import Usage
 from emissary_router.catalog import CATALOG, PROVIDER_ENV, TokenPricing
@@ -31,6 +32,7 @@ logger = logging.getLogger(__name__)
 
 SESSION_HEADER = "x-claude-code-session-id"
 BASELINE_MODEL = "claude-sonnet-4.6"  # the "default Sonnet" side of the demo comparison
+_AGENT_MAX_ROUNDS = 16  # runaway guard for the tool loop, not a functional limit
 
 
 class RouterPipeline:
@@ -294,10 +296,14 @@ class RouterPipeline:
         max_tokens: int = 32000,
         effort: str | None = None,
         policy: str | None = None,
+        search: bool = False,
     ):
         """Stream both sides of one turn as one merged event stream. Yields dicts:
-        `{"side","type":"delta"/"meta"/"done", ...}`. Same routing + cache wiring as
-        chat(); both sides run concurrently and their events interleave."""
+        `{"side","type":"delta"/"tool"/"meta"/"done", ...}`. Same routing + cache wiring
+        as chat(); both sides run concurrently and their events interleave. When `search`
+        is on, each side is a web-search agent (it may search before answering, emitting
+        `tool` events between bursts of text)."""
+        tools = [demo_search.WEB_SEARCH_TOOL] if search else None
         queue: asyncio.Queue = asyncio.Queue()
 
         async def pump(side: str, gen):
@@ -311,8 +317,8 @@ class RouterPipeline:
                 })
 
         tasks = [
-            asyncio.create_task(pump("baseline", self._stream_side("baseline", BASELINE_MODEL, baseline_messages, max_tokens, effort))),
-            asyncio.create_task(pump("routed", self._stream_routed(routed_messages, max_tokens, effort, session_id, policy))),
+            asyncio.create_task(pump("baseline", self._stream_side("baseline", BASELINE_MODEL, baseline_messages, max_tokens, effort, tools=tools))),
+            asyncio.create_task(pump("routed", self._stream_routed(routed_messages, max_tokens, effort, session_id, policy, tools))),
         ]
         remaining = 2
         try:
@@ -324,7 +330,7 @@ class RouterPipeline:
         finally:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def _stream_routed(self, messages, max_tokens, effort, session_id, policy):
+    async def _stream_routed(self, messages, max_tokens, effort, session_id, policy, tools=None):
         body = self._demo_body(messages, max_tokens, effort)
         headers = {SESSION_HEADER: session_id} if session_id else {}
         cost_features = extract_request_cost_features(
@@ -336,7 +342,7 @@ class RouterPipeline:
         yield {"side": "routed", "type": "meta", "model": decision.model_name,
                "route_reason": decision.reason, "router_ms": router_ms}
         captured: dict = {}
-        async for ev in self._stream_side("routed", decision.model_name, messages, max_tokens, effort, captured):
+        async for ev in self._stream_side("routed", decision.model_name, messages, max_tokens, effort, captured, tools):
             if ev.get("type") == "done":
                 ev["router_ms"] = router_ms
                 ev["total_ms"] = round(router_ms + ev["model_ms"], 1)
@@ -346,51 +352,99 @@ class RouterPipeline:
             self._config.resolve_model(decision.model_name), cost_features, captured.get("usage") or Usage()
         )
 
-    async def _stream_side(self, side, model_name, messages, max_tokens, effort, captured=None):
+    async def _stream_side(self, side, model_name, messages, max_tokens, effort, captured=None, tools=None):
+        """Stream one side as a (possibly tool-using) agent. Streams text deltas; if the
+        model calls tools, runs them and continues — looping until it answers without a
+        tool call. The round cap is a runaway guard, not a functional limit."""
         model = self._config.resolve_model(model_name)
         provider = self._providers.get(model.provider) or build_provider(
             model.provider,
             ProviderConfig(type=model.provider, api_key=os.environ.get(PROVIDER_ENV[model.provider])),
         )
-        send_body = self._demo_body(messages, max_tokens, effort)
-        send_body["messages"] = _with_cache_breakpoint(send_body["messages"])
-        send_body["stream"] = True
-        cap: dict = {}
-
-        def on_complete(usage: Usage, provider_metadata: dict) -> None:
-            cap["usage"] = usage
-            cap["status"] = provider_metadata.get("http_status")
-
+        convo = list(messages)
+        agg = Usage()
+        searches = 0
+        status = None
         started = time.time()
-        response = await provider.messages(
-            AnthropicRequest(body=send_body, headers={}),
-            model=model,
-            context=RequestContext(
-                request_id="demo", conversation_id=None, classifier_input="", requested_model=model_name
-            ),
-            on_complete=on_complete,
-        )
-        buf = ""
-        async for chunk in response.body_iterator:
-            text = chunk.decode("utf-8", "replace") if isinstance(chunk, (bytes, bytearray)) else str(chunk)
-            buf += text
-            while "\n" in buf:
-                line, buf = buf.split("\n", 1)
-                delta = _sse_text_delta(line)
-                if delta:
-                    yield {"side": side, "type": "delta", "text": delta}
+
+        for _ in range(_AGENT_MAX_ROUNDS):
+            send_body = self._demo_body(convo, max_tokens, effort)
+            send_body["messages"] = _with_cache_breakpoint(send_body["messages"])
+            send_body["stream"] = True
+            if tools:
+                send_body["tools"] = tools
+            cap: dict = {}
+
+            def on_complete(usage: Usage, provider_metadata: dict, _cap=cap) -> None:
+                _cap["usage"] = usage
+                _cap["status"] = provider_metadata.get("http_status")
+
+            response = await provider.messages(
+                AnthropicRequest(body=send_body, headers={}),
+                model=model,
+                context=RequestContext(
+                    request_id="demo", conversation_id=None, classifier_input="", requested_model=model_name
+                ),
+                on_complete=on_complete,
+            )
+            blocks: dict = {}
+            stop_reason = None
+            buf = ""
+            async for chunk in response.body_iterator:
+                text = chunk.decode("utf-8", "replace") if isinstance(chunk, (bytes, bytearray)) else str(chunk)
+                buf += text
+                while "\n" in buf:
+                    line, buf = buf.split("\n", 1)
+                    event = _parse_sse_event(line)
+                    if event is None:
+                        continue
+                    etype = event.get("type")
+                    if etype == "content_block_start":
+                        blocks[event.get("index")] = {**(event.get("content_block") or {}), "_json": ""}
+                    elif etype == "content_block_delta":
+                        delta = event.get("delta") or {}
+                        if delta.get("type") == "text_delta" and delta.get("text"):
+                            yield {"side": side, "type": "delta", "text": delta["text"]}
+                        elif delta.get("type") == "input_json_delta":
+                            blk = blocks.get(event.get("index"))
+                            if blk is not None:
+                                blk["_json"] += delta.get("partial_json", "")
+                    elif etype == "message_delta":
+                        stop_reason = (event.get("delta") or {}).get("stop_reason") or stop_reason
+
+            agg = _add_usage(agg, cap.get("usage") or Usage())
+            status = cap.get("status")
+            if stop_reason != "tool_use":
+                break
+
+            # Run the tool calls and feed the results back, then loop.
+            content = _blocks_to_content(blocks)
+            convo.append({"role": "assistant", "content": content})
+            results = []
+            for block in content:
+                if block.get("type") == "tool_use" and block.get("name") == "web_search":
+                    query = (block.get("input") or {}).get("query", "")
+                    searches += 1
+                    yield {"side": side, "type": "tool", "name": "web_search", "query": query}
+                    results.append({
+                        "type": "tool_result", "tool_use_id": block.get("id"),
+                        "content": await demo_search.web_search(query),
+                    })
+            if not results:
+                break
+            convo.append({"role": "user", "content": results})
+
         latency_ms = round((time.time() - started) * 1000, 1)
-        usage = cap.get("usage") or Usage()
         if captured is not None:
-            captured["usage"] = usage
-        status = cap.get("status")
+            captured["usage"] = agg
         yield {
             "side": side, "type": "done", "model": model_name, "provider": model.provider,
             "error": None if (status is None or status < 400) else f"upstream {status}",
-            "cost_usd": round(_cost_usd(CATALOG[model_name].pricing, usage), 6),
-            "output_tokens": usage.output_tokens,
-            "cache_read_tokens": usage.cache_read_input_tokens,
-            "cache_creation_tokens": usage.cache_creation_input_tokens,
+            "cost_usd": round(_cost_usd(CATALOG[model_name].pricing, agg), 6),
+            "output_tokens": agg.output_tokens,
+            "cache_read_tokens": agg.cache_read_input_tokens,
+            "cache_creation_tokens": agg.cache_creation_input_tokens,
+            "searches": searches,
             "router_ms": 0.0, "model_ms": latency_ms, "total_ms": latency_ms,
         }
 
@@ -461,9 +515,9 @@ def _int_or_none(value: object) -> int | None:
     return int(value) if isinstance(value, int) else None
 
 
-def _sse_text_delta(line: str) -> str | None:
-    """Pull assistant text out of one Anthropic-format SSE line (both demo providers emit
-    this shape). Returns the text of a content_block_delta/text_delta, else None."""
+def _parse_sse_event(line: str) -> dict | None:
+    """Parse one Anthropic-format SSE `data:` line into its event dict (both demo
+    providers emit this shape). Returns None for non-data / unparseable lines."""
     if not line.startswith("data:"):
         return None
     payload = line[5:].strip()
@@ -473,11 +527,36 @@ def _sse_text_delta(line: str) -> str | None:
         event = json.loads(payload)
     except (ValueError, TypeError):
         return None
-    if event.get("type") == "content_block_delta":
-        delta = event.get("delta") or {}
-        if delta.get("type") == "text_delta":
-            return delta.get("text") or None
-    return None
+    return event if isinstance(event, dict) else None
+
+
+def _blocks_to_content(blocks: dict) -> list[dict]:
+    """Rebuild the assistant `content` array from streamed content blocks (text +
+    tool_use), so a tool round can be appended to the conversation and replayed."""
+    content = []
+    for index in sorted(blocks):
+        block = blocks[index]
+        if block.get("type") == "text":
+            content.append({"type": "text", "text": block.get("text", "")})
+        elif block.get("type") == "tool_use":
+            try:
+                tool_input = json.loads(block.get("_json") or "{}")
+            except (ValueError, TypeError):
+                tool_input = {}
+            content.append({
+                "type": "tool_use", "id": block.get("id"),
+                "name": block.get("name"), "input": tool_input,
+            })
+    return content
+
+
+def _add_usage(a: Usage, b: Usage) -> Usage:
+    return Usage(
+        input_tokens=a.input_tokens + b.input_tokens,
+        output_tokens=a.output_tokens + b.output_tokens,
+        cache_read_input_tokens=a.cache_read_input_tokens + b.cache_read_input_tokens,
+        cache_creation_input_tokens=a.cache_creation_input_tokens + b.cache_creation_input_tokens,
+    )
 
 
 def _with_cache_breakpoint(messages: list[dict]) -> list[dict]:

@@ -159,6 +159,66 @@ def test_stream_chat_yields_deltas_and_done():
     assert routed_done["total_ms"] >= routed_done["model_ms"]  # router time included
 
 
+def _sse(ev):
+    return "data: " + __import__("json").dumps(ev) + "\n\n"
+
+
+class _ToolStreamProvider:
+    """Round 1: the model calls web_search; round 2 (once a tool_result is in the
+    conversation): it answers. Deterministic per side via conversation state."""
+    name = "anthropic"
+
+    async def messages(self, request, model, context, on_complete):
+        msgs = request.body.get("messages") or []
+        answered = any(
+            isinstance(m.get("content"), list)
+            and any(isinstance(b, dict) and b.get("type") == "tool_result" for b in m["content"])
+            for m in msgs
+        )
+
+        async def gen():
+            if not answered:
+                yield _sse({"type": "content_block_start", "index": 0,
+                            "content_block": {"type": "tool_use", "id": "t1", "name": "web_search"}})
+                yield _sse({"type": "content_block_delta", "index": 0,
+                            "delta": {"type": "input_json_delta", "partial_json": '{"query": "weather"}'}})
+                yield _sse({"type": "message_delta", "delta": {"stop_reason": "tool_use"}})
+                on_complete(Usage(input_tokens=100, output_tokens=10), {"http_status": 200})
+            else:
+                yield _sse({"type": "content_block_delta", "index": 0,
+                            "delta": {"type": "text_delta", "text": "It is sunny"}})
+                yield _sse({"type": "message_delta", "delta": {"stop_reason": "end_turn"}})
+                on_complete(Usage(input_tokens=50, output_tokens=5), {"http_status": 200})
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+def test_stream_chat_runs_web_search_tool_loop(monkeypatch):
+    import emissary_router.demo_search as ds
+    calls = []
+
+    async def fake_search(query):
+        calls.append(query)
+        return "RESULTS for " + query
+
+    monkeypatch.setattr(ds, "web_search", fake_search)
+
+    pipe = _pipeline(_ConfidentHaiku())
+    pipe._providers = {"anthropic": _ToolStreamProvider()}
+
+    async def collect():
+        return [ev async for ev in pipe.stream_chat(_turn("weather?"), _turn("weather?"), search=True)]
+
+    evs = asyncio.run(collect())
+    tool_evs = [e for e in evs if e["type"] == "tool"]
+    assert any(e["query"] == "weather" for e in tool_evs)  # tool event surfaced
+    assert "weather" in calls  # the search actually ran
+    routed_text = "".join(e["text"] for e in evs if e.get("side") == "routed" and e["type"] == "delta")
+    assert "sunny" in routed_text  # answer streamed after the tool round
+    routed_done = next(e for e in evs if e["type"] == "done" and e["side"] == "routed")
+    assert routed_done["searches"] >= 1
+
+
 def test_stream_endpoint_emits_sse():
     resp = _client().post(
         "/api/demo/stream",
@@ -174,7 +234,7 @@ class _RecordingPipeline:
     def __init__(self):
         self.kwargs = None
 
-    async def stream_chat(self, baseline_messages, routed_messages, session_id=None, max_tokens=32000, effort=None, policy=None):
+    async def stream_chat(self, baseline_messages, routed_messages, session_id=None, max_tokens=32000, effort=None, policy=None, search=False):
         yield {"side": "routed", "type": "meta", "model": "claude-haiku-4.5", "router_ms": 2}
         yield {"side": "baseline", "type": "delta", "text": "hi"}
         yield {"side": "baseline", "type": "done", "model": "claude-sonnet-4.6", "cost_usd": 0.002,
