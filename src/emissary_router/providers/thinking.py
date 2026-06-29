@@ -33,6 +33,18 @@ THINKING_CAPABILITIES = {
         accepts_adaptive_thinking=False,
         max_effort="high",
     ),
+    # OpenRouter: GLM-5.2 supports reasoning effort high/xhigh (xhigh == max).
+    "glm-5.2": ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=False,
+        max_effort="xhigh",
+    ),
+    # OpenRouter: Kimi K2.7 Code always reasons and cannot disable thinking, so it does
+    # not take an effort level — reasoning is bounded by budget (max_tokens) instead.
+    "kimi-k2.7-code": ModelThinkingCapabilities(
+        accepts_effort_param=False,
+        accepts_adaptive_thinking=False,
+    ),
 }
 
 

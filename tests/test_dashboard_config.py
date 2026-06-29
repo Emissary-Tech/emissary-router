@@ -38,11 +38,14 @@ def test_get_config_lists_catalog_cheap_first(tmp_path):
     assert body["default"] == "claude-sonnet-4.6"
     assert body["confidence"] == 0.8
     assert [m["name"] for m in body["models"]][0] == "gemini-3.1-flash-lite"
-    assert {m["name"]: m["enabled"] for m in body["models"]} == {
-        "claude-sonnet-4.6": True,
-        "claude-haiku-4.5": True,
-        "gemini-3.1-flash-lite": True,
-    }
+    enabled = {m["name"]: m["enabled"] for m in body["models"]}
+    # The three configured models are enabled; catalog-only models (not in this config)
+    # show up disabled and toggleable.
+    assert enabled["claude-sonnet-4.6"] is True
+    assert enabled["claude-haiku-4.5"] is True
+    assert enabled["gemini-3.1-flash-lite"] is True
+    assert enabled["glm-5.2"] is False
+    assert enabled["kimi-k2.7-code"] is False
 
 
 def test_put_config_toggles_and_persists(tmp_path):

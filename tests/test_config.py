@@ -29,12 +29,43 @@ def _config(**overrides) -> AppConfig:
     return AppConfig.model_validate(raw)
 
 
-def test_catalog_order_is_cheap_to_expensive() -> None:
-    assert list(CATALOG) == [
+def test_glm_and_kimi_are_openrouter_only_with_expected_pricing() -> None:
+    glm = CATALOG["glm-5.2"]
+    assert glm.providers == {"openrouter": "z-ai/glm-5.2"}
+    assert glm.default_provider == "openrouter"
+    assert (glm.pricing.input, glm.pricing.output, glm.pricing.cache_read) == (0.94, 3.00, 0.18)
+    # OpenRouter implicit caching: no write premium, so cache_write == input price.
+    assert glm.pricing.cache_write_5m == glm.pricing.input
+
+    kimi = CATALOG["kimi-k2.7-code"]
+    assert kimi.providers == {"openrouter": "moonshotai/kimi-k2.7-code"}
+    assert kimi.default_provider == "openrouter"
+    assert (kimi.pricing.input, kimi.pricing.output, kimi.pricing.cache_read) == (0.74, 3.50, 0.15)
+    assert kimi.pricing.cache_write_5m == kimi.pricing.input
+
+
+def test_glm_and_kimi_are_selectable_in_config() -> None:
+    config = _config(
+        models={
+            "claude-sonnet-4.6": True,
+            "glm-5.2": {"enabled": True, "provider": "openrouter"},
+            "kimi-k2.7-code": True,
+        },
+    )
+    assert "glm-5.2" in config.enabled_models()
+    assert config.resolve_model("kimi-k2.7-code").model_id == "moonshotai/kimi-k2.7-code"
+
+
+def test_catalog_contains_supported_models() -> None:
+    # Catalog insertion order is cosmetic: routing derives order from cost_score
+    # (see test_routing_order_is_by_price_not_dict_order), so assert membership, not order.
+    assert set(CATALOG) == {
         "gemini-3.1-flash-lite",
+        "glm-5.2",
+        "kimi-k2.7-code",
         "claude-haiku-4.5",
         "claude-sonnet-4.6",
-    ]
+    }
 
 
 def test_cost_score_orders_catalog_cheap_to_expensive() -> None:
@@ -42,6 +73,8 @@ def test_cost_score_orders_catalog_cheap_to_expensive() -> None:
 
     assert (
         cost_score(CATALOG["gemini-3.1-flash-lite"])
+        < cost_score(CATALOG["glm-5.2"])
+        < cost_score(CATALOG["kimi-k2.7-code"])
         < cost_score(CATALOG["claude-haiku-4.5"])
         < cost_score(CATALOG["claude-sonnet-4.6"])
     )
@@ -57,6 +90,8 @@ def test_routing_order_is_by_price_not_dict_order(monkeypatch: pytest.MonkeyPatc
     config = _config(models={name: True for name in reordered})
     assert config.enabled_models() == [
         "gemini-3.1-flash-lite",
+        "glm-5.2",
+        "kimi-k2.7-code",
         "claude-haiku-4.5",
         "claude-sonnet-4.6",
     ]

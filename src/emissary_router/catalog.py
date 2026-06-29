@@ -48,6 +48,34 @@ CATALOG: dict[str, ModelSpec] = {
             cache_write_1h=0.25,
         ),
     ),
+    "glm-5.2": ModelSpec(
+        name="glm-5.2",
+        # OpenRouter only. Caching is implicit (no cache-write premium), so
+        # cache_write == input price; only cache reads are discounted.
+        providers={"openrouter": "z-ai/glm-5.2"},
+        default_provider="openrouter",
+        pricing=TokenPricing(
+            input=0.94,
+            output=3.00,
+            cache_read=0.18,
+            cache_write_5m=0.94,
+            cache_write_1h=0.94,
+        ),
+    ),
+    "kimi-k2.7-code": ModelSpec(
+        name="kimi-k2.7-code",
+        # OpenRouter only. Implicit caching (no cache-write premium). Always reasons —
+        # thinking cannot be disabled (see THINKING_CAPABILITIES).
+        providers={"openrouter": "moonshotai/kimi-k2.7-code"},
+        default_provider="openrouter",
+        pricing=TokenPricing(
+            input=0.74,
+            output=3.50,
+            cache_read=0.15,
+            cache_write_5m=0.74,
+            cache_write_1h=0.74,
+        ),
+    ),
     "claude-haiku-4.5": ModelSpec(
         name="claude-haiku-4.5",
         providers={

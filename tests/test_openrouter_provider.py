@@ -106,6 +106,36 @@ def test_openrouter_haiku_effort_maps_to_budget_from_output_max_tokens() -> None
     assert "effort" not in req["reasoning"]
 
 
+def test_openrouter_glm_max_effort_maps_to_xhigh() -> None:
+    req = OpenRouterProvider.to_openai_request(
+        {"messages": [], "thinking": {"effort": "max"}},
+        "z-ai/glm-5.2",
+        model_name="glm-5.2",
+    )
+    assert req["reasoning"]["effort"] == "xhigh"
+
+
+def test_openrouter_glm_high_effort_preserved() -> None:
+    req = OpenRouterProvider.to_openai_request(
+        {"messages": [], "thinking": {"effort": "high"}},
+        "z-ai/glm-5.2",
+        model_name="glm-5.2",
+    )
+    assert req["reasoning"]["effort"] == "high"
+
+
+def test_openrouter_kimi_always_thinking_uses_budget_not_effort() -> None:
+    # Kimi cannot disable thinking and takes no effort level, so an effort request maps
+    # to a reasoning budget rather than an effort string.
+    req = OpenRouterProvider.to_openai_request(
+        {"messages": [], "max_tokens": 32000, "thinking": {"effort": "max"}},
+        "moonshotai/kimi-k2.7-code",
+        model_name="kimi-k2.7-code",
+    )
+    assert req["reasoning"]["max_tokens"] == 31999
+    assert "effort" not in req["reasoning"]
+
+
 def test_openrouter_reasoning_budget_maps_to_max_tokens() -> None:
     req = OpenRouterProvider.to_openai_request(
         {"messages": [], "thinking": {"type": "enabled", "budget_tokens": 4096}},

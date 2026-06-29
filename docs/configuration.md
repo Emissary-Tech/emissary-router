@@ -21,7 +21,9 @@ This is the full shipped config. Everything not shown uses defaults.
   "models": {
     "claude-sonnet-4.6": { "enabled": true, "provider": "anthropic" },
     "claude-haiku-4.5": { "enabled": true, "provider": "anthropic" },
-    "gemini-3.1-flash-lite": { "enabled": true, "provider": "openrouter" }
+    "gemini-3.1-flash-lite": { "enabled": true, "provider": "openrouter" },
+    "glm-5.2": { "enabled": true, "provider": "openrouter" },
+    "kimi-k2.7-code": { "enabled": true, "provider": "openrouter" }
   },
   "default": "claude-sonnet-4.6",
   "confidence": 0.8,
@@ -60,8 +62,10 @@ providers, and its `cost_score`. Routing scans enabled models cheapest-first, wh
 reordering the catalog can't change routing. Cheapest → most expensive today:
 
 1. `gemini-3.1-flash-lite`
-2. `claude-haiku-4.5`
-3. `claude-sonnet-4.6`
+2. `glm-5.2`
+3. `kimi-k2.7-code`
+4. `claude-haiku-4.5`
+5. `claude-sonnet-4.6`
 
 #### Choosing a provider
 
@@ -74,6 +78,8 @@ only how the request is delivered changes.
 | `claude-sonnet-4.6`     | `anthropic`, `openrouter`     |
 | `claude-haiku-4.5`      | `anthropic`, `openrouter`     |
 | `gemini-3.1-flash-lite` | `openrouter`                  |
+| `glm-5.2`               | `openrouter`                  |
+| `kimi-k2.7-code`        | `openrouter`                  |
 
 Common reasons to override: you only hold one provider's key, or you want to
 consolidate billing. For example, if you only have an OpenRouter key, route the Claude
@@ -91,7 +97,14 @@ Only the keys for the providers you actually resolve to are required — the exa
 above needs only `OPENROUTER_API_KEY`. Picking a provider a model does not support
 (e.g. Gemini on `anthropic`) fails validation. Gemini is OpenRouter-only in V1 because
 native Google Gemini 3 is unsafe for Claude Code tool loops (see
-[providers and caching](providers-caching.md)).
+[providers and caching](providers-caching.md)). `glm-5.2` and `kimi-k2.7-code` are
+OpenRouter-only as well; `kimi-k2.7-code` always reasons (its thinking can't be
+disabled), so it keeps reasoning even on background calls.
+
+> Routing to a model requires the configured `router.router_model` to be trained on it.
+> The default shared router must recognize `glm-5.2` / `kimi-k2.7-code` for them to be
+> routable — otherwise enabling them makes the classifier return a label mismatch. See
+> [`router`](#router).
 
 ### `default` (required)
 
