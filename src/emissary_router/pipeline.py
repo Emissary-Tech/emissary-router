@@ -11,7 +11,7 @@ from datetime import datetime
 import httpx
 from starlette.responses import JSONResponse, Response
 
-from emissary_router import demo_search
+from emissary_router import demo_search, demo_stream
 from emissary_router.caching.ledger import CacheLedger
 from emissary_router.caching.usage import Usage
 from emissary_router.catalog import CATALOG, PROVIDER_ENV, TokenPricing
@@ -399,66 +399,41 @@ class RouterPipeline:
             send_body = self._demo_body(convo, max_tokens, effort, with_search=bool(tools))
             _demo_reasoning_for_model(send_body, model_name)
             send_body["messages"] = _with_cache_breakpoint(send_body["messages"])
-            send_body["stream"] = True
             if tools:
                 send_body["tools"] = tools
-            cap: dict = {}
 
-            def on_complete(usage: Usage, provider_metadata: dict, _cap=cap) -> None:
-                _cap["usage"] = usage
-                _cap["status"] = provider_metadata.get("http_status")
-
-            response = await provider.messages(
-                AnthropicRequest(body=send_body, headers=dict(_DEMO_HEADERS)),
-                model=model,
-                context=RequestContext(
-                    request_id="demo", conversation_id=None, classifier_input="", requested_model=model_name
-                ),
-                on_complete=on_complete,
-            )
-            blocks: dict = {}
+            text = {"text": ""}
+            thinking = {"thinking": "", "signature": ""}
+            tool_uses: list[dict] = []
             stop_reason = None
-            buf = ""
-            async for chunk in response.body_iterator:
-                text = chunk.decode("utf-8", "replace") if isinstance(chunk, (bytes, bytearray)) else str(chunk)
-                buf += text
-                while "\n" in buf:
-                    line, buf = buf.split("\n", 1)
-                    event = _parse_sse_event(line)
-                    if event is None:
-                        continue
-                    etype = event.get("type")
-                    if etype == "content_block_start":
-                        blocks[event.get("index")] = {**(event.get("content_block") or {}), "_json": ""}
-                    elif etype == "content_block_delta":
-                        delta = event.get("delta") or {}
-                        dtype = delta.get("type")
-                        blk = blocks.get(event.get("index"))
-                        if dtype == "text_delta" and delta.get("text"):
-                            if blk is not None:
-                                blk["text"] = blk.get("text", "") + delta["text"]
-                            yield {"side": side, "type": "delta", "text": delta["text"]}
-                        elif dtype == "input_json_delta" and blk is not None:
-                            blk["_json"] += delta.get("partial_json", "")
-                        elif dtype == "thinking_delta" and blk is not None:
-                            # captured (to replay across tool rounds) but not shown
-                            blk["_thinking"] = blk.get("_thinking", "") + delta.get("thinking", "")
-                        elif dtype == "signature_delta" and blk is not None:
-                            blk["_sig"] = blk.get("_sig", "") + delta.get("signature", "")
-                    elif etype == "message_delta":
-                        stop_reason = (event.get("delta") or {}).get("stop_reason") or stop_reason
+            # Real per-provider streaming: Anthropic native, OpenRouter passthrough.
+            async for nev in demo_stream.stream_model(provider, model, send_body, _DEMO_HEADERS):
+                ntype = nev["type"]
+                if ntype == "text":
+                    text["text"] += nev["text"]
+                    yield {"side": side, "type": "delta", "text": nev["text"]}
+                elif ntype == "thinking":
+                    thinking["thinking"] += nev["text"]  # captured, not shown
+                elif ntype == "signature":
+                    thinking["signature"] += nev["text"]
+                elif ntype == "tool_call":
+                    tool_uses.append({"type": "tool_use", "id": nev["id"],
+                                      "name": nev["name"], "input": nev.get("input") or {}})
+                elif ntype == "done":
+                    agg = _add_usage(agg, nev.get("usage") or Usage())
+                    status = nev.get("status")
+                    stop_reason = nev.get("stop_reason")
 
-            agg = _add_usage(agg, cap.get("usage") or Usage())
-            status = cap.get("status")
-            if stop_reason != "tool_use":
+            if stop_reason != "tool_use" or not tool_uses:
                 break
 
-            # Run the tool calls and feed the results back, then loop.
-            content = _blocks_to_content(blocks)
-            convo.append({"role": "assistant", "content": content})
+            # Replay the assistant turn (thinking + text + tool calls), run the tools,
+            # feed the results back, then loop.
+            convo.append({"role": "assistant",
+                          "content": _assistant_turn_content(text["text"], thinking, tool_uses)})
             results = []
-            for block in content:
-                if block.get("type") == "tool_use" and block.get("name") == "web_search":
+            for block in tool_uses:
+                if block.get("name") == "web_search":
                     query = (block.get("input") or {}).get("query", "")
                     searches += 1
                     yield {"side": side, "type": "tool", "name": "web_search", "query": query}
@@ -594,46 +569,21 @@ def _demo_system(with_search: bool) -> str:
     return "\n".join(lines)
 
 
-def _parse_sse_event(line: str) -> dict | None:
-    """Parse one Anthropic-format SSE `data:` line into its event dict (both demo
-    providers emit this shape). Returns None for non-data / unparseable lines."""
-    if not line.startswith("data:"):
-        return None
-    payload = line[5:].strip()
-    if not payload or payload == "[DONE]":
-        return None
-    try:
-        event = json.loads(payload)
-    except (ValueError, TypeError):
-        return None
-    return event if isinstance(event, dict) else None
-
-
-def _blocks_to_content(blocks: dict) -> list[dict]:
-    """Rebuild the assistant `content` array from streamed content blocks (thinking +
-    text + tool_use), so a tool round can be appended to the conversation and replayed.
-    Thinking blocks are kept (with their signature) because Anthropic requires them to be
-    preserved when continuing after a tool call with extended thinking on."""
-    content = []
-    for index in sorted(blocks):
-        block = blocks[index]
-        btype = block.get("type")
-        if btype == "thinking":
-            thinking_block: dict = {"type": "thinking", "thinking": block.get("_thinking", "")}
-            if block.get("_sig"):
-                thinking_block["signature"] = block["_sig"]
-            content.append(thinking_block)
-        elif btype == "text":
-            content.append({"type": "text", "text": block.get("text", "")})
-        elif btype == "tool_use":
-            try:
-                tool_input = json.loads(block.get("_json") or "{}")
-            except (ValueError, TypeError):
-                tool_input = {}
-            content.append({
-                "type": "tool_use", "id": block.get("id"),
-                "name": block.get("name"), "input": tool_input,
-            })
+def _assistant_turn_content(text: str, thinking: dict, tool_uses: list[dict]) -> list[dict]:
+    """Rebuild the assistant `content` for a tool round so it can be appended to the
+    conversation and replayed. A signed thinking block is kept first (Anthropic requires
+    it preserved when continuing after a tool call with extended thinking on); then any
+    text, then the tool calls."""
+    content: list[dict] = []
+    if thinking.get("signature"):
+        content.append({
+            "type": "thinking",
+            "thinking": thinking.get("thinking", ""),
+            "signature": thinking["signature"],
+        })
+    if text:
+        content.append({"type": "text", "text": text})
+    content.extend(tool_uses)
     return content
 
 

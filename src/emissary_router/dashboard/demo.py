@@ -272,6 +272,7 @@ _PAGE = """<!doctype html>
         <option value="64000">64k</option>
       </select>
     </label>
+    <label><input type="checkbox" id="stream" checked /> Stream</label>
     <label><input type="checkbox" id="search" /> Web search</label>
     <span>both sides use the same settings; converted per model</span>
   </div>
@@ -471,7 +472,9 @@ async function send() {
     bubble("pane-base", "user", q); bubble("pane-routed", "user", q);
     bSlot = bubble("pane-base", "asst", "…");
     rSlot = bubble("pane-routed", "asst", "…");
-    if ($("search").checked) await streamTurn(bSlot, rSlot);  // search uses the agent/tool loop
+    // Stream (real per-provider passthrough) or search (agent/tool loop) -> SSE turn;
+    // otherwise two independent requests, faster side rendered first.
+    if ($("stream").checked || $("search").checked) await streamTurn(bSlot, rSlot);
     else await twoSidedTurn(bSlot, rSlot);
   } catch (e) {
     const msg = (e && e.name === "AbortError") ? "timed out" : (e && e.message ? e.message : e);

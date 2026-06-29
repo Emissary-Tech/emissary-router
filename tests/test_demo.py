@@ -135,17 +135,23 @@ def test_chat_resolves_reasoning_per_model():
     assert any((b.get("thinking") or {}).get("budget_tokens") == 32000 for b in bodies)
 
 
-def test_blocks_to_content_preserves_thinking_for_tool_continuation():
-    from emissary_router.pipeline import _blocks_to_content
-    blocks = {
-        0: {"type": "thinking", "_thinking": "let me think", "_sig": "sig123"},
-        1: {"type": "text", "text": "Searching."},
-        2: {"type": "tool_use", "id": "t1", "name": "web_search", "_json": '{"query":"x"}'},
-    }
-    content = _blocks_to_content(blocks)
+def test_assistant_turn_content_preserves_thinking_for_tool_continuation():
+    from emissary_router.pipeline import _assistant_turn_content
+    tool_uses = [{"type": "tool_use", "id": "t1", "name": "web_search", "input": {"query": "x"}}]
+    content = _assistant_turn_content(
+        "Searching.", {"thinking": "let me think", "signature": "sig123"}, tool_uses
+    )
     assert content[0] == {"type": "thinking", "thinking": "let me think", "signature": "sig123"}
     assert content[1] == {"type": "text", "text": "Searching."}
-    assert content[2]["type"] == "tool_use" and content[2]["input"] == {"query": "x"}
+    assert content[2] == tool_uses[0]
+
+
+def test_assistant_turn_content_drops_unsigned_thinking_and_empty_text():
+    from emissary_router.pipeline import _assistant_turn_content
+    # No signature (e.g. OpenRouter) -> no thinking block replayed; empty text -> skipped.
+    tool_uses = [{"type": "tool_use", "id": "t1", "name": "web_search", "input": {}}]
+    content = _assistant_turn_content("", {"thinking": "x", "signature": ""}, tool_uses)
+    assert content == tool_uses
 
 
 def test_demo_reasoning_off_adds_no_reasoning():
@@ -280,6 +286,117 @@ def test_stream_endpoint_emits_sse():
     body = resp.text
     assert "data:" in body
     assert "claude-haiku-4.5" in body
+
+
+def _fake_openrouter_httpx(monkeypatch, lines, status=200):
+    """Patch demo_stream's httpx so the OpenRouter passthrough reads a canned OpenAI SSE
+    stream (line-by-line, like a real upstream) instead of hitting the network."""
+    import emissary_router.demo_stream as dstream
+
+    class _Resp:
+        status_code = status
+
+        async def aiter_lines(self):
+            for line in lines:
+                yield line
+
+        async def aread(self):
+            return b"error body"
+
+    class _Stream:
+        async def __aenter__(self):
+            return _Resp()
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        def stream(self, *a, **k):
+            return _Stream()
+
+    monkeypatch.setattr(dstream.httpx, "AsyncClient", _Client)
+
+
+def _openrouter_model():
+    from emissary_router.config import AppConfig
+
+    config = AppConfig.model_validate(
+        {"models": {"gemini-3.1-flash-lite": True, "claude-sonnet-4.6": True}, "default": "claude-sonnet-4.6"}
+    )
+    return config.resolve_model("gemini-3.1-flash-lite")  # OpenRouter-only in the catalog
+
+
+def _or_provider():
+    from emissary_router.config import ProviderConfig
+    from emissary_router.providers.openrouter import OpenRouterProvider
+
+    return OpenRouterProvider(ProviderConfig(type="openrouter", api_key="k"))
+
+
+def _drain(provider, model, body):
+    import emissary_router.demo_stream as dstream
+
+    async def collect():
+        return [ev async for ev in dstream.stream_model(provider, model, body, {})]
+
+    return asyncio.run(collect())
+
+
+def test_openrouter_passthrough_streams_token_by_token(monkeypatch):
+    # Two separate content deltas must arrive as two text events (real streaming), not one
+    # buffered blob — this is the whole point of the passthrough.
+    _fake_openrouter_httpx(monkeypatch, [
+        'data: {"choices":[{"delta":{"content":"Hel"}}]}',
+        'data: {"choices":[{"delta":{"content":"lo"}}]}',
+        'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+        'data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2}}',
+        "data: [DONE]",
+    ])
+    evs = _drain(_or_provider(), _openrouter_model(),
+                 {"messages": [{"role": "user", "content": "hi"}], "max_tokens": 64})
+
+    text_evs = [e for e in evs if e["type"] == "text"]
+    assert [e["text"] for e in text_evs] == ["Hel", "lo"]  # streamed in pieces
+    done = evs[-1]
+    assert done["type"] == "done"
+    assert done["stop_reason"] == "end_turn"
+    assert done["usage"].output_tokens == 2
+    assert done["status"] == 200
+
+
+def test_openrouter_passthrough_accumulates_streamed_tool_call(monkeypatch):
+    # OpenAI streams tool-call arguments as partial-JSON deltas; the passthrough must
+    # reassemble them into one completed tool_call event.
+    _fake_openrouter_httpx(monkeypatch, [
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"web_search","arguments":"{\\"que"}}]}}]}',
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"ry\\":\\"x\\"}"}}]}}]}',
+        'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
+        "data: [DONE]",
+    ])
+    evs = _drain(_or_provider(), _openrouter_model(),
+                 {"messages": [{"role": "user", "content": "hi"}], "max_tokens": 64})
+
+    tool = next(e for e in evs if e["type"] == "tool_call")
+    assert tool["name"] == "web_search"
+    assert tool["input"] == {"query": "x"}
+    assert evs[-1]["stop_reason"] == "tool_use"  # finish_reason tool_calls -> tool_use
+
+
+def test_openrouter_passthrough_surfaces_upstream_error(monkeypatch):
+    _fake_openrouter_httpx(monkeypatch, [], status=400)
+    evs = _drain(_or_provider(), _openrouter_model(),
+                 {"messages": [{"role": "user", "content": "hi"}], "max_tokens": 64})
+    assert len(evs) == 1
+    assert evs[0]["type"] == "done" and evs[0]["status"] == 400
 
 
 class _RecordingPipeline:

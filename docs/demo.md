@@ -75,6 +75,11 @@ converts them for its own model internally.
   an effort param (Haiku), the demo gives it a thinking budget of half `max_tokens` instead.
 - **Max tokens** — `32k` / `64k`. Only a ceiling to avoid truncation; cost is from the
   *actual* output, so a higher ceiling does not raise cost on its own.
+- **Stream** — on by default: each side streams its answer token-by-token, so whichever
+  finishes first is read live (and you see the answer build). It uses a per-provider
+  passthrough — Anthropic streams natively, and OpenRouter is read in its own OpenAI SSE
+  format directly rather than buffered. Off falls back to two whole-answer requests, still
+  rendering the faster side first.
 - **Web search** — give both sides a `web_search` tool and run a tool loop: the model can
   search before answering (a `🔎 searching` indicator shows), looping until it answers.
   Uses [Tavily](https://tavily.com) when a key is set, a mock result otherwise so the demo
