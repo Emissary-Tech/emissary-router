@@ -299,6 +299,7 @@ const baselineMsgs = [], routedMsgs = [];
 let cCost = 0, rCost = 0, cLat = 0, rLat = 0, turns = 0;
 const newId = () => (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : "s-" + Date.now() + "-" + (turns);
 let sessionId = newId();
+let inFlight = false;
 
 function bubble(paneId, role, text) {
   const wrap = document.createElement("div");
@@ -399,9 +400,11 @@ async function streamTurn(bSlot, rSlot) {
 }
 
 async function send() {
+  if (inFlight) return;  // one turn at a time — both sides must finish before the next
   const q = $("q").value.trim();
   if (!q) return;
-  $("q").value = ""; $("send").disabled = true;
+  inFlight = true;
+  $("q").value = ""; $("send").disabled = true; $("q").disabled = true;
   baselineMsgs.push({ role: "user", content: q });
   routedMsgs.push({ role: "user", content: q });
   bubble("pane-base", "user", q); bubble("pane-routed", "user", q);
@@ -415,7 +418,8 @@ async function send() {
     rSlot.bub.textContent = "";
     baselineMsgs.pop(); routedMsgs.pop();  // drop the user turn so the chat stays consistent
   } finally {
-    $("send").disabled = false; $("q").focus();
+    inFlight = false;
+    $("send").disabled = false; $("q").disabled = false; $("q").focus();
   }
 }
 
