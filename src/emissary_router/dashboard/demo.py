@@ -198,9 +198,20 @@ _PAGE = """<!doctype html>
   input#q { flex:1; background:#0f1115; color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:10px 12px; font:inherit; }
   button.primary { background:var(--accent); border:none; color:#fff; border-radius:8px; padding:0 18px; cursor:pointer; font:inherit; font-weight:500; }
   button.primary:disabled { opacity:.5; cursor:default; }
+</style>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+<style>
   .opts { display:flex; gap:18px; align-items:center; margin-top:10px; font-size:13px; color:var(--muted); }
   .opts label { display:flex; align-items:center; gap:6px; }
   .opts select { background:#0f1115; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:4px 6px; font:inherit; }
+  .bub table { border-collapse:collapse; margin:8px 0; font-size:13px; }
+  .bub th, .bub td { border:1px solid var(--line); padding:4px 9px; text-align:left; }
+  .bub th { background:#1b1f28; font-weight:500; }
+  .bub blockquote { border-left:3px solid var(--line); margin:6px 0; padding:2px 12px; color:var(--muted); }
+  .bub hr { border:none; border-top:1px solid var(--line); margin:10px 0; }
+  .bub .katex-display { margin:8px 0; overflow-x:auto; overflow-y:hidden; }
   .gearlink { position:fixed; right:16px; bottom:14px; background:var(--panel); border:1px solid var(--line); color:var(--muted); border-radius:999px; padding:7px 14px; font-size:13px; text-decoration:none; }
   .gearlink:hover { color:var(--fg); border-color:var(--accent); }
   .keyrow { display:flex; gap:10px; align-items:center; margin-top:10px; font-size:13px; color:var(--muted); }
@@ -279,19 +290,36 @@ const short = (m) => m.replace("claude-", "").replace("-4.6", "").replace("-4.5"
 
 const mdEsc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 function md(src) {
-  const cb = [];
-  let s = String(src).replace(/```([\\s\\S]*?)```/g, (_, c) => { cb.push("<pre><code>" + mdEsc(c.replace(/^\\n/, "")) + "</code></pre>"); return "%%CB" + (cb.length - 1) + "%%"; });
+  const ph = [];
+  const stash = (h) => { ph.push(h); return "%%PH" + (ph.length - 1) + "%%"; };
+  let s = String(src);
+  s = s.replace(/```([\\s\\S]*?)```/g, (_, c) => stash("<pre><code>" + mdEsc(c.replace(/^\\n/, "")) + "</code></pre>"));
+  s = s.replace(/\\$\\$([\\s\\S]+?)\\$\\$/g, (_, m) => stash('<span class="math">$$' + mdEsc(m) + '$$</span>'));
+  s = s.replace(/\\$([^$\\n]+?)\\$/g, (_, m) => stash('<span class="math">$' + mdEsc(m) + '$</span>'));
   s = mdEsc(s);
   s = s.replace(/`([^`]+)`/g, (_, c) => "<code>" + c + "</code>");
   s = s.replace(/\\*\\*([^*]+)\\*\\*/g, "<strong>$1</strong>");
   s = s.replace(/(^|[^*])\\*([^*\\n]+)\\*/g, "$1<em>$2</em>");
   s = s.replace(/\\[([^\\]]+)\\]\\((https?:[^\\s)]+)\\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
   s = s.replace(/^###\\s+(.+)$/gm, "<h4>$1</h4>").replace(/^##\\s+(.+)$/gm, "<h3>$1</h3>").replace(/^#\\s+(.+)$/gm, "<h3>$1</h3>");
-  s = s.replace(/(?:^|\\n)((?:[-*]\\s+.+(?:\\n|$))+)/g, (_, it) => "<ul>" + it.trim().split(/\\n/).map((l) => "<li>" + l.replace(/^[-*]\\s+/, "") + "</li>").join("") + "</ul>");
-  s = s.replace(/(?:^|\\n)((?:\\d+\\.\\s+.+(?:\\n|$))+)/g, (_, it) => "<ol>" + it.trim().split(/\\n/).map((l) => "<li>" + l.replace(/^\\d+\\.\\s+/, "") + "</li>").join("") + "</ol>");
+  s = s.replace(/(?:^|\\n)(\\|.+\\|)\\n\\|[\\s:|-]+\\|\\n((?:\\|.+\\|\\n?)*)/g, (_, head, rows) => {
+    const cells = (r) => r.split("|").slice(1, -1).map((c) => c.trim());
+    const th = cells(head).map((c) => "<th>" + c + "</th>").join("");
+    const trs = rows.trim().split(/\\n/).map((r) => "<tr>" + cells(r).map((c) => "<td>" + c + "</td>").join("") + "</tr>").join("");
+    return stash("<table><thead><tr>" + th + "</tr></thead><tbody>" + trs + "</tbody></table>");
+  });
+  s = s.replace(/(?:^|\\n)((?:&gt;\\s?.*(?:\\n|$))+)/g, (_, b) => stash("<blockquote>" + b.trim().split(/\\n/).map((l) => l.replace(/^&gt;\\s?/, "")).join("<br>") + "</blockquote>"));
+  s = s.replace(/(?:^|\\n)---+(?:\\n|$)/g, () => stash("<hr>"));
+  s = s.replace(/(?:^|\\n)((?:[-*]\\s+.+(?:\\n|$))+)/g, (_, it) => stash("<ul>" + it.trim().split(/\\n/).map((l) => "<li>" + l.replace(/^[-*]\\s+/, "") + "</li>").join("") + "</ul>"));
+  s = s.replace(/(?:^|\\n)((?:\\d+\\.\\s+.+(?:\\n|$))+)/g, (_, it) => stash("<ol>" + it.trim().split(/\\n/).map((l) => "<li>" + l.replace(/^\\d+\\.\\s+/, "") + "</li>").join("") + "</ol>"));
   s = s.replace(/\\n{2,}/g, "<br><br>").replace(/\\n/g, "<br>");
-  s = s.replace(/%%CB(\\d+)%%/g, (_, i) => cb[+i]);
+  s = s.replace(/%%PH(\\d+)%%/g, (_, i) => ph[+i]);
   return s;
+}
+function typeset(el) {
+  if (window.renderMathInElement) {
+    try { renderMathInElement(el, { delimiters: [{ left: "$$", right: "$$", display: true }, { left: "$", right: "$", display: false }], throwOnError: false }); } catch (_) {}
+  }
 }
 function renderMd(bub, text) { bub.className = "bub md"; bub.innerHTML = md(text); }
 
@@ -330,6 +358,7 @@ function fill(slot, d, routed, keepText) {
   } else {
     slot.foot.innerHTML = usd(d.cost_usd) + ' · <span class="mono">' + ms(d.total_ms) + "</span>" + sx;
   }
+  typeset(slot.bub);  // render any LaTeX math once the answer is final
   slot.pane.scrollTop = slot.pane.scrollHeight;
 }
 
@@ -436,6 +465,7 @@ $("q").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
 $("newchat").onclick = newChat;
 document.querySelectorAll(".chip").forEach((c) => c.onclick = () => { $("q").value = c.dataset.q; send(); });
 $("gear").href = "/dashboard" + (KEY ? "?key=" + encodeURIComponent(KEY) : "") + "#settings";
+window.addEventListener("load", () => document.querySelectorAll(".bub.md").forEach(typeset));
 
 async function loadKey() {
   try {
