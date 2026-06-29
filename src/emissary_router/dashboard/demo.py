@@ -125,7 +125,7 @@ def _clamp_int(value, default: int, lo: int, hi: int) -> int:
 PRESETS = [
     "What's the difference between TCP and UDP?",
     "Summarize what a hash map is in two sentences.",
-    "If 3x + 7 = 22, what is x?",
+    "Find the median of two sorted arrays in O(log(m+n)) time, with code and a correctness argument.",
     "Prove that the square root of 2 is irrational.",
 ]
 
@@ -380,8 +380,15 @@ const reqBody = () => JSON.stringify({
   effort: $("effort").value || null, search: $("search").checked,
 });
 
+async function fetchT(url, opts, ms) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  try { return await fetch(url, { ...opts, signal: ctrl.signal }); }
+  finally { clearTimeout(t); }
+}
+
 async function onceTurn(bSlot, rSlot) {
-  const r = await fetch("/api/demo/chat", { method: "POST", headers: hdrs(), body: reqBody() });
+  const r = await fetchT("/api/demo/chat", { method: "POST", headers: hdrs(), body: reqBody() }, 180000);
   const j = await r.json();
   if (!r.ok) throw new Error(j.error || r.status);
   fill(bSlot, j.baseline, false);
@@ -394,13 +401,18 @@ async function onceTurn(bSlot, rSlot) {
 async function streamTurn(bSlot, rSlot) {
   const slots = { baseline: bSlot, routed: rSlot };
   const acc = { baseline: "", routed: "" }, fin = {};
-  const r = await fetch("/api/demo/stream", { method: "POST", headers: hdrs(), body: reqBody() });
+  const ctrl = new AbortController();
+  let timer = setTimeout(() => ctrl.abort(), 150000);  // idle guard: abort if no data for a while
+  const bump = () => { clearTimeout(timer); timer = setTimeout(() => ctrl.abort(), 150000); };
+  try {
+  const r = await fetch("/api/demo/stream", { method: "POST", headers: hdrs(), body: reqBody(), signal: ctrl.signal });
   if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || r.status); }
   const reader = r.body.getReader(), dec = new TextDecoder();
   let buf = "";
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
+    bump();
     buf += dec.decode(value, { stream: true });
     let idx;
     while ((idx = buf.indexOf("\\n\\n")) >= 0) {
@@ -426,6 +438,7 @@ async function streamTurn(bSlot, rSlot) {
   baselineMsgs.push({ role: "assistant", content: acc.baseline });
   routedMsgs.push({ role: "assistant", content: acc.routed });
   if (fin.baseline && fin.routed) updateTotals({ baseline: fin.baseline, routed: fin.routed });
+  } finally { clearTimeout(timer); }
 }
 
 async function send() {
@@ -434,18 +447,21 @@ async function send() {
   if (!q) return;
   inFlight = true;
   $("q").value = ""; $("send").disabled = true; $("q").disabled = true;
-  baselineMsgs.push({ role: "user", content: q });
-  routedMsgs.push({ role: "user", content: q });
-  bubble("pane-base", "user", q); bubble("pane-routed", "user", q);
-  const bSlot = bubble("pane-base", "asst", "…");
-  const rSlot = bubble("pane-routed", "asst", "…");
+  let bSlot = null, rSlot = null, added = false;
   try {
+    baselineMsgs.push({ role: "user", content: q });
+    routedMsgs.push({ role: "user", content: q });
+    added = true;
+    bubble("pane-base", "user", q); bubble("pane-routed", "user", q);
+    bSlot = bubble("pane-base", "asst", "…");
+    rSlot = bubble("pane-routed", "asst", "…");
     if ($("stream").checked || $("search").checked) await streamTurn(bSlot, rSlot);
     else await onceTurn(bSlot, rSlot);
   } catch (e) {
-    bSlot.bub.textContent = "Error: " + e.message;
-    rSlot.bub.textContent = "";
-    baselineMsgs.pop(); routedMsgs.pop();  // drop the user turn so the chat stays consistent
+    const msg = (e && e.name === "AbortError") ? "timed out" : (e && e.message ? e.message : e);
+    if (bSlot) bSlot.bub.textContent = "Error: " + msg;
+    if (rSlot) rSlot.bub.textContent = "";
+    if (added) { baselineMsgs.pop(); routedMsgs.pop(); }  // drop the user turn so the chat stays consistent
   } finally {
     inFlight = false;
     $("send").disabled = false; $("q").disabled = false; $("q").focus();
