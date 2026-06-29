@@ -18,6 +18,7 @@ from emissary_router.catalog import CATALOG, PROVIDER_ENV, TokenPricing
 from emissary_router.config import AppConfig, ProviderConfig
 from emissary_router.schemas import AnthropicRequest, RequestContext, RouteDecision
 from emissary_router.providers.registry import build_provider
+from emissary_router.providers.thinking import accepts_effort_for_model
 from emissary_router.routing.classifier import ClassifierClient
 from emissary_router.routing.cache_cost import extract_request_cost_features
 from emissary_router.routing.policy import choose_model
@@ -263,6 +264,7 @@ class RouterPipeline:
             captured["http_status"] = provider_metadata.get("http_status")
 
         send_body = dict(body)
+        _demo_reasoning_for_model(send_body, model_name)
         send_body["messages"] = _with_cache_breakpoint(send_body.get("messages") or [])
         started = time.time()
         response = await provider.messages(
@@ -376,6 +378,7 @@ class RouterPipeline:
 
         for _ in range(_AGENT_MAX_ROUNDS):
             send_body = self._demo_body(convo, max_tokens, effort, with_search=bool(tools))
+            _demo_reasoning_for_model(send_body, model_name)
             send_body["messages"] = _with_cache_breakpoint(send_body["messages"])
             send_body["stream"] = True
             if tools:
@@ -410,12 +413,19 @@ class RouterPipeline:
                         blocks[event.get("index")] = {**(event.get("content_block") or {}), "_json": ""}
                     elif etype == "content_block_delta":
                         delta = event.get("delta") or {}
-                        if delta.get("type") == "text_delta" and delta.get("text"):
-                            yield {"side": side, "type": "delta", "text": delta["text"]}
-                        elif delta.get("type") == "input_json_delta":
-                            blk = blocks.get(event.get("index"))
+                        dtype = delta.get("type")
+                        blk = blocks.get(event.get("index"))
+                        if dtype == "text_delta" and delta.get("text"):
                             if blk is not None:
-                                blk["_json"] += delta.get("partial_json", "")
+                                blk["text"] = blk.get("text", "") + delta["text"]
+                            yield {"side": side, "type": "delta", "text": delta["text"]}
+                        elif dtype == "input_json_delta" and blk is not None:
+                            blk["_json"] += delta.get("partial_json", "")
+                        elif dtype == "thinking_delta" and blk is not None:
+                            # captured (to replay across tool rounds) but not shown
+                            blk["_thinking"] = blk.get("_thinking", "") + delta.get("thinking", "")
+                        elif dtype == "signature_delta" and blk is not None:
+                            blk["_sig"] = blk.get("_sig", "") + delta.get("signature", "")
                     elif etype == "message_delta":
                         stop_reason = (event.get("delta") or {}).get("stop_reason") or stop_reason
 
@@ -522,6 +532,19 @@ def _int_or_none(value: object) -> int | None:
     return int(value) if isinstance(value, int) else None
 
 
+def _demo_reasoning_for_model(body: dict, model_name: str) -> None:
+    """Demo-only: a model that doesn't take an effort param (e.g. Haiku) gets a thinking
+    budget of half its max_tokens instead, so reasoning still happens when requested and
+    the answer keeps room. Models that do take effort keep `output_config.effort`. The
+    Claude Code integration never calls this, so its behavior is unchanged."""
+    output_config = body.get("output_config")
+    effort = output_config.get("effort") if isinstance(output_config, dict) else None
+    if effort and not accepts_effort_for_model(model_name):
+        body.pop("output_config", None)
+        budget = max(1024, (body.get("max_tokens") or 32000) // 2)
+        body["thinking"] = {"type": "enabled", "budget_tokens": budget}
+
+
 def _demo_system(with_search: bool) -> str:
     """Demo system prompt — applied identically to both sides. Honest (no impersonation),
     minimal, with today's real date (so models don't treat the present as the future) and
@@ -568,14 +591,22 @@ def _parse_sse_event(line: str) -> dict | None:
 
 
 def _blocks_to_content(blocks: dict) -> list[dict]:
-    """Rebuild the assistant `content` array from streamed content blocks (text +
-    tool_use), so a tool round can be appended to the conversation and replayed."""
+    """Rebuild the assistant `content` array from streamed content blocks (thinking +
+    text + tool_use), so a tool round can be appended to the conversation and replayed.
+    Thinking blocks are kept (with their signature) because Anthropic requires them to be
+    preserved when continuing after a tool call with extended thinking on."""
     content = []
     for index in sorted(blocks):
         block = blocks[index]
-        if block.get("type") == "text":
+        btype = block.get("type")
+        if btype == "thinking":
+            thinking_block: dict = {"type": "thinking", "thinking": block.get("_thinking", "")}
+            if block.get("_sig"):
+                thinking_block["signature"] = block["_sig"]
+            content.append(thinking_block)
+        elif btype == "text":
             content.append({"type": "text", "text": block.get("text", "")})
-        elif block.get("type") == "tool_use":
+        elif btype == "tool_use":
             try:
                 tool_input = json.loads(block.get("_json") or "{}")
             except (ValueError, TypeError):

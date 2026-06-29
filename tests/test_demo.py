@@ -112,15 +112,37 @@ def test_chat_includes_dated_system_prompt():
         assert "web_search" not in body["system"]  # chat path has no search block
 
 
-def test_chat_applies_same_settings_to_both_sides():
+def test_chat_resolves_reasoning_per_model():
+    # routed side is haiku (no effort param) -> thinking budget; baseline sonnet -> effort
     pipe = _pipeline(_ConfidentHaiku())
     asyncio.run(pipe.chat(_turn("hi"), _turn("hi"), max_tokens=64000, effort="high"))
 
     bodies = pipe._providers["anthropic"].bodies
-    assert len(bodies) == 2  # baseline + routed, identical settings
-    for body in bodies:
-        assert body["max_tokens"] == 64000
-        assert body["output_config"] == {"effort": "high"}
+    assert len(bodies) == 2
+    assert all(b["max_tokens"] == 64000 for b in bodies)  # same token budget on both
+    assert {"effort": "high"} in [b.get("output_config") for b in bodies]  # sonnet keeps effort
+    # haiku gets a thinking budget of half max_tokens instead of effort
+    assert any((b.get("thinking") or {}).get("budget_tokens") == 32000 for b in bodies)
+
+
+def test_blocks_to_content_preserves_thinking_for_tool_continuation():
+    from emissary_router.pipeline import _blocks_to_content
+    blocks = {
+        0: {"type": "thinking", "_thinking": "let me think", "_sig": "sig123"},
+        1: {"type": "text", "text": "Searching."},
+        2: {"type": "tool_use", "id": "t1", "name": "web_search", "_json": '{"query":"x"}'},
+    }
+    content = _blocks_to_content(blocks)
+    assert content[0] == {"type": "thinking", "thinking": "let me think", "signature": "sig123"}
+    assert content[1] == {"type": "text", "text": "Searching."}
+    assert content[2]["type"] == "tool_use" and content[2]["input"] == {"query": "x"}
+
+
+def test_demo_reasoning_off_adds_no_reasoning():
+    from emissary_router.pipeline import _demo_reasoning_for_model
+    body = {"max_tokens": 32000}
+    _demo_reasoning_for_model(body, "claude-haiku-4.5")
+    assert "thinking" not in body and "output_config" not in body
 
 
 def test_chat_sends_history_with_cache_breakpoint():
