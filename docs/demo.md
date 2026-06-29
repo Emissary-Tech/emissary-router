@@ -75,11 +75,10 @@ converts them for its own model internally.
   an effort param (Haiku), the demo gives it a thinking budget of half `max_tokens` instead.
 - **Max tokens** — `32k` / `64k`. Only a ceiling to avoid truncation; cost is from the
   *actual* output, so a higher ceiling does not raise cost on its own.
-- **Stream** — render both answers token by token (default from `demo.streaming`).
 - **Web search** — give both sides a `web_search` tool and run a tool loop: the model can
-  search before answering (a `🔎 searching` indicator shows mid-stream), looping until it
-  answers. Uses [Tavily](https://tavily.com) when a key is set, a mock result otherwise so
-  the demo still runs offline. Enabling search forces streaming.
+  search before answering (a `🔎 searching` indicator shows), looping until it answers.
+  Uses [Tavily](https://tavily.com) when a key is set, a mock result otherwise so the demo
+  still runs offline.
 - **Web search key (Tavily)** — paste a Tavily key to enable real search without an env
   var. It's written to `~/.emissary-router/.env` (never the config) and applied
   immediately; the page only ever shows a masked hint.
@@ -125,11 +124,12 @@ borderline questions can route either way run to run.
 ## Config
 
 ```json
-"demo": { "enabled": true, "streaming": false }
+"demo": { "enabled": true }
 ```
 
 - `enabled` — mount the demo routes (`/demo`, `/api/demo/chat`, `/api/demo/stream`).
-- `streaming` — default mode for the page's Stream toggle.
+  This block is optional and on by default; add it only to turn the demo off
+  (`"demo": { "enabled": false }`).
 
 Because each turn calls two models, keep `er demo` behind `auth_key` if the gateway is
 reachable beyond your machine.

@@ -300,7 +300,7 @@ class _RecordingPipeline:
 
 def _client(pipeline=None):
     app = FastAPI()
-    app.include_router(build_demo_router(auth_key=None, streaming_default=False))
+    app.include_router(build_demo_router(auth_key=None))
     app.state.pipeline = pipeline or _RecordingPipeline()
     return TestClient(app)
 

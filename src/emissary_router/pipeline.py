@@ -35,6 +35,9 @@ logger = logging.getLogger(__name__)
 SESSION_HEADER = "x-claude-code-session-id"
 BASELINE_MODEL = "claude-sonnet-4.6"  # the "default Sonnet" side of the demo comparison
 _AGENT_MAX_ROUNDS = 16  # runaway guard for the tool loop, not a functional limit
+# Anthropic requires this header on every request; Claude Code sends it, but the demo
+# builds its own requests, so it must supply it (harmless for other providers).
+_DEMO_HEADERS = {"anthropic-version": "2023-06-01"}
 
 
 class RouterPipeline:
@@ -268,7 +271,7 @@ class RouterPipeline:
         send_body["messages"] = _with_cache_breakpoint(send_body.get("messages") or [])
         started = time.time()
         response = await provider.messages(
-            AnthropicRequest(body=send_body, headers={}),
+            AnthropicRequest(body=send_body, headers=dict(_DEMO_HEADERS)),
             model=model,
             context=RequestContext(
                 request_id="demo",
@@ -390,7 +393,7 @@ class RouterPipeline:
                 _cap["status"] = provider_metadata.get("http_status")
 
             response = await provider.messages(
-                AnthropicRequest(body=send_body, headers={}),
+                AnthropicRequest(body=send_body, headers=dict(_DEMO_HEADERS)),
                 model=model,
                 context=RequestContext(
                     request_id="demo", conversation_id=None, classifier_input="", requested_model=model_name

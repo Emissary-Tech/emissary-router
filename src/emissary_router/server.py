@@ -53,10 +53,7 @@ def create_app() -> FastAPI:
 
     if config.demo.enabled:
         app.include_router(
-            build_demo_router(
-                auth_key=config.server.auth_key,
-                streaming_default=config.demo.streaming,
-            )
+            build_demo_router(auth_key=config.server.auth_key)
         )
 
     @app.get("/")

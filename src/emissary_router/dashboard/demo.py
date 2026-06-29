@@ -10,7 +10,7 @@ from emissary_router.config import read_env_file, user_env_path, write_env_file
 from emissary_router.dashboard.routes import _make_auth_dependency
 
 
-def build_demo_router(auth_key: str | None = None, streaming_default: bool = False) -> APIRouter:
+def build_demo_router(auth_key: str | None = None) -> APIRouter:
     """Conference split-screen demo: default Sonnet vs the routed system as two parallel
     chats. Mounted only when `demo.enabled`, behind the same auth as the dashboard (each
     turn makes two real model calls). The chat handler reads the live `app.state.pipeline`,
@@ -20,7 +20,7 @@ def build_demo_router(auth_key: str | None = None, streaming_default: bool = Fal
 
     @router.get("/demo")
     async def demo_page() -> HTMLResponse:
-        return HTMLResponse(demo_html(streaming_default))
+        return HTMLResponse(demo_html())
 
     @router.post("/api/demo/chat")
     async def chat(request: Request, payload: dict = Body(...)) -> JSONResponse:
@@ -131,13 +131,11 @@ PRESETS = [
 ]
 
 
-def demo_html(streaming_default: bool = False) -> str:
+def demo_html() -> str:
     chips = "".join(
         f'<button class="chip" data-q="{_esc(q)}">{_esc(q)}</button>' for q in PRESETS
     )
-    return _PAGE.replace("__CHIPS__", chips).replace(
-        "__STREAM_CHECKED__", "checked" if streaming_default else ""
-    )
+    return _PAGE.replace("__CHIPS__", chips)
 
 
 def _esc(s: str) -> str:
@@ -270,7 +268,6 @@ _PAGE = """<!doctype html>
         <option value="64000">64k</option>
       </select>
     </label>
-    <label><input type="checkbox" id="stream" __STREAM_CHECKED__/> Stream</label>
     <label><input type="checkbox" id="search" /> Web search</label>
     <span>both sides use the same settings; converted per model</span>
   </div>
@@ -432,6 +429,7 @@ async function streamTurn(bSlot, rSlot) {
         slot.foot.textContent = "🔎 searching: " + (ev.query || "");
       } else if (ev.type === "done") {
         fin[ev.side] = ev;
+        if (ev.error && !acc[ev.side]) slot.bub.textContent = "Error: " + ev.error;
         fill(slot, { ...ev, answer: acc[ev.side] || ev.answer }, ev.side === "routed", true);
       }
     }
@@ -456,7 +454,7 @@ async function send() {
     bubble("pane-base", "user", q); bubble("pane-routed", "user", q);
     bSlot = bubble("pane-base", "asst", "…");
     rSlot = bubble("pane-routed", "asst", "…");
-    if ($("stream").checked || $("search").checked) await streamTurn(bSlot, rSlot);
+    if ($("search").checked) await streamTurn(bSlot, rSlot);  // search uses the agent/tool loop
     else await onceTurn(bSlot, rSlot);
   } catch (e) {
     const msg = (e && e.name === "AbortError") ? "timed out" : (e && e.message ? e.message : e);

@@ -204,7 +204,6 @@ class DemoConfig(BaseModel):
     # Conference split-screen demo (default Sonnet vs routed). Makes real model calls,
     # so it sits behind the same auth as the dashboard; mounted only when enabled.
     enabled: bool = True
-    streaming: bool = False  # default UI mode; the page can still toggle it live
 
 
 class AppConfig(BaseModel):
