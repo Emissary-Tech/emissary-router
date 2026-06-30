@@ -135,13 +135,23 @@ def test_openrouter_kimi_max_effort_maps_to_xhigh() -> None:
     assert "max_tokens" not in req["reasoning"]
 
 
-def test_openrouter_kimi_disabled_thinking_sends_none() -> None:
-    # Kimi can't actually disable thinking, but we still emit the valid effort:none
-    # (OpenRouter accepts it; the model ignores it).
+def test_openrouter_kimi_disabled_thinking_omits_reasoning() -> None:
+    # Kimi always reasons; OpenRouter 400s on effort:none ("Reasoning is mandatory ...
+    # cannot be disabled"). So a disable request must omit reasoning entirely.
     req = OpenRouterProvider.to_openai_request(
         {"messages": [], "thinking": {"type": "disabled"}},
         "moonshotai/kimi-k2.7-code",
         model_name="kimi-k2.7-code",
+    )
+    assert "reasoning" not in req
+
+
+def test_openrouter_disable_thinking_still_sends_none_for_normal_models() -> None:
+    # GLM (and others that can disable) still send the valid effort:none.
+    req = OpenRouterProvider.to_openai_request(
+        {"messages": [], "thinking": {"type": "disabled"}},
+        "z-ai/glm-5.2",
+        model_name="glm-5.2",
     )
     assert req["reasoning"] == {"effort": "none"}
 

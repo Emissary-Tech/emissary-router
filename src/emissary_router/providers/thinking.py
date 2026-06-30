@@ -16,6 +16,9 @@ class ModelThinkingCapabilities:
     accepts_effort_param: bool = False
     accepts_adaptive_thinking: bool = False
     max_effort: str | None = None
+    # Some models always reason and reject a disable request (OpenRouter returns 400
+    # "Reasoning is mandatory ... cannot be disabled"). For those, never emit effort:none.
+    can_disable_thinking: bool = True
 
 
 THINKING_CAPABILITIES = {
@@ -47,6 +50,7 @@ THINKING_CAPABILITIES = {
         accepts_effort_param=True,
         accepts_adaptive_thinking=False,
         max_effort="xhigh",
+        can_disable_thinking=False,
     ),
 }
 
@@ -108,6 +112,11 @@ def normalize_effort(effort: str | None, max_effort: str = "high") -> str | None
 def max_effort_for_model(model_name: str, default: str = "high") -> str:
     capabilities = THINKING_CAPABILITIES.get(model_name)
     return capabilities.max_effort if capabilities and capabilities.max_effort else default
+
+
+def can_disable_thinking_for_model(model_name: str, default: bool = True) -> bool:
+    capabilities = THINKING_CAPABILITIES.get(model_name)
+    return capabilities.can_disable_thinking if capabilities else default
 
 
 def accepts_effort_for_model(model_name: str, default: bool = True) -> bool:

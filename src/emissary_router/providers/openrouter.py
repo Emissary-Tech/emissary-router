@@ -13,6 +13,7 @@ from emissary_router.schemas import AnthropicRequest, RequestContext
 from emissary_router.providers.base import ProviderComplete
 from emissary_router.providers.thinking import (
     accepts_effort_for_model,
+    can_disable_thinking_for_model,
     extract_reasoning_settings,
     max_effort_for_model,
     normalize_effort,
@@ -333,7 +334,11 @@ class OpenRouterProvider:
         settings = extract_reasoning_settings(body)
         reasoning: dict[str, Any] = {}
         if settings.effort == "none":
-            reasoning["effort"] = "none"
+            # A model that always reasons (e.g. Kimi) rejects a disable with HTTP 400
+            # ("Reasoning is mandatory ... cannot be disabled"). Omit the field instead
+            # so the request succeeds; the model just reasons by default.
+            if can_disable_thinking_for_model(model_name):
+                reasoning["effort"] = "none"
         elif settings.effort is not None and not accepts_effort_for_model(model_name):
             reasoning["max_tokens"] = thinking_budget_from_max_tokens(body)
         elif settings.effort is not None:
