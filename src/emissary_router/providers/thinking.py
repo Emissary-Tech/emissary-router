@@ -39,11 +39,14 @@ THINKING_CAPABILITIES = {
         accepts_adaptive_thinking=False,
         max_effort="xhigh",
     ),
-    # OpenRouter: Kimi K2.7 Code always reasons and cannot disable thinking, so it does
-    # not take an effort level — reasoning is bounded by budget (max_tokens) instead.
+    # OpenRouter: Kimi K2.7 Code reasons via the effort param (OpenRouter maps the level
+    # to a reasoning budget; xhigh ~= 95% of max_tokens). It always reasons — thinking
+    # can't be disabled — so an effort:none (disable) request is sent but ignored by the
+    # model. xhigh is allowed so a max-effort request gets full reasoning budget.
     "kimi-k2.7-code": ModelThinkingCapabilities(
-        accepts_effort_param=False,
+        accepts_effort_param=True,
         accepts_adaptive_thinking=False,
+        max_effort="xhigh",
     ),
 }
 
