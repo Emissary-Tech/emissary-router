@@ -119,6 +119,14 @@ def can_disable_thinking_for_model(model_name: str, default: bool = True) -> boo
     return capabilities.can_disable_thinking if capabilities else default
 
 
+def always_on_reasoning_models() -> set[str]:
+    """Models that always reason and can't be sent a disable — not appropriate for
+    non-thinking (background) calls."""
+    return {
+        name for name, cap in THINKING_CAPABILITIES.items() if not cap.can_disable_thinking
+    }
+
+
 def accepts_effort_for_model(model_name: str, default: bool = True) -> bool:
     capabilities = THINKING_CAPABILITIES.get(model_name)
     return capabilities.accepts_effort_param if capabilities else default
