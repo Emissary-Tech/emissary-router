@@ -26,6 +26,22 @@ from emissary_router.providers.thinking import (
 logger = logging.getLogger(__name__)
 
 
+def _reasoning_text(obj: dict[str, Any]) -> str:
+    """Reasoning text from an OpenAI-style delta/message. Prefers the flat `reasoning`
+    field (what GLM/Kimi send); falls back to text inside `reasoning_details` for models
+    that only populate the structured form. Signature-only detail entries (no text) are
+    skipped, so this never duplicates or emits empty thinking."""
+    text = obj.get("reasoning")
+    if text:
+        return text
+    details = obj.get("reasoning_details")
+    if isinstance(details, list):
+        return "".join(
+            d["text"] for d in details if isinstance(d, dict) and d.get("text")
+        )
+    return ""
+
+
 def _request_summary(oai_body: dict[str, Any]) -> str:
     messages = oai_body.get("messages") or []
     roles = [m.get("role") for m in messages if isinstance(m, dict)]
@@ -313,7 +329,7 @@ class OpenRouterProvider:
                 finish_reason = choice["finish_reason"]
             delta = choice.get("delta") or {}
 
-            reasoning = delta.get("reasoning")
+            reasoning = _reasoning_text(delta)
             if reasoning:
                 for event in open_thinking():
                     yield event
@@ -430,7 +446,7 @@ class OpenRouterProvider:
 
         # Surface reasoning as a thinking block (parity with the streaming path), stamped
         # with the synthetic signature the Anthropic provider strips on later turns.
-        reasoning = oai_message.get("reasoning")
+        reasoning = _reasoning_text(oai_message)
         if reasoning:
             content.append(
                 {

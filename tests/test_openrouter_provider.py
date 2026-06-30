@@ -306,6 +306,18 @@ def test_openrouter_anthropic_sse_contains_cache_usage() -> None:
     assert '"output_tokens": 5' in sse
 
 
+def test_reasoning_text_prefers_flat_then_details_no_dup() -> None:
+    from emissary_router.providers.openrouter import _reasoning_text
+
+    assert _reasoning_text({"reasoning": "flat"}) == "flat"
+    assert _reasoning_text({"reasoning_details": [{"type": "reasoning.text", "text": "detailed"}]}) == "detailed"
+    # both present -> flat wins, no duplication
+    assert _reasoning_text({"reasoning": "flat", "reasoning_details": [{"text": "detailed"}]}) == "flat"
+    # signature-only detail (no text) -> nothing
+    assert _reasoning_text({"reasoning_details": [{"type": "reasoning.text", "signature": "sig"}]}) == ""
+    assert _reasoning_text({}) == ""
+
+
 def test_from_openai_response_surfaces_reasoning_as_thinking() -> None:
     payload = {
         "choices": [
