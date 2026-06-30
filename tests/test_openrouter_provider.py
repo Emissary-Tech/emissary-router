@@ -306,6 +306,19 @@ def test_openrouter_anthropic_sse_contains_cache_usage() -> None:
     assert '"output_tokens": 5' in sse
 
 
+def test_from_openai_response_surfaces_reasoning_as_thinking() -> None:
+    payload = {
+        "choices": [
+            {"message": {"reasoning": "glm thought", "content": "the answer"}, "finish_reason": "stop"}
+        ]
+    }
+    msg = OpenRouterProvider.from_openai_response(payload, "glm-5.2")
+    assert [b["type"] for b in msg["content"]] == ["thinking", "text"]
+    assert msg["content"][0]["thinking"] == "glm thought"
+    assert msg["content"][0]["signature"] == "emissary:non-anthropic-reasoning"
+    assert msg["content"][1]["text"] == "the answer"
+
+
 def test_openrouter_folds_inline_system_message_into_system() -> None:
     body = {
         "system": "main system",

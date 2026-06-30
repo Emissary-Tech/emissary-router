@@ -428,6 +428,18 @@ class OpenRouterProvider:
         oai_message = choice.get("message", {}) or {}
         content: list[dict[str, Any]] = []
 
+        # Surface reasoning as a thinking block (parity with the streaming path), stamped
+        # with the synthetic signature the Anthropic provider strips on later turns.
+        reasoning = oai_message.get("reasoning")
+        if reasoning:
+            content.append(
+                {
+                    "type": "thinking",
+                    "thinking": reasoning,
+                    "signature": SYNTHETIC_THINKING_SIGNATURE,
+                }
+            )
+
         if oai_message.get("content"):
             content.append({"type": "text", "text": oai_message["content"]})
 
