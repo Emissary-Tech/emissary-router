@@ -304,3 +304,48 @@ def test_openrouter_anthropic_sse_contains_cache_usage() -> None:
     assert '"cache_read_input_tokens": 700' in sse
     assert '"cache_creation_input_tokens": 100' in sse
     assert '"output_tokens": 5' in sse
+
+
+def test_openrouter_stream_translation_reasoning_text_and_tools() -> None:
+    import asyncio
+    import json as _json
+
+    chunks = [
+        {"choices": [{"delta": {"role": "assistant", "reasoning": "thinking..."}}]},
+        {"choices": [{"delta": {"content": "Hel"}}]},
+        {"choices": [{"delta": {"content": "lo"}}]},
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "id": "call_1", "function": {"name": "Read", "arguments": '{"p":'}}
+        ]}}]},
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "function": {"arguments": "1}"}}
+        ]}, "finish_reason": "tool_calls"}]},
+        {"choices": [], "usage": {"prompt_tokens": 12, "completion_tokens": 7}},
+    ]
+    lines = ["data: " + _json.dumps(c) for c in chunks] + ["data: [DONE]"]
+
+    async def aiter():
+        for line in lines:
+            yield line
+
+    async def run():
+        sink: dict = {}
+        events = []
+        async for ev in OpenRouterProvider._iter_anthropic_events(aiter(), "kimi-k2.7-code", sink):
+            events.append(ev.decode())
+        return "".join(events), sink
+
+    text, sink = asyncio.run(run())
+
+    assert "event: message_start" in text
+    # reasoning surfaced as a thinking block (parity with native models), closed with the
+    # synthetic signature the Anthropic provider strips on later turns
+    assert '"type": "thinking"' in text
+    assert '"thinking_delta"' in text and '"thinking": "thinking..."' in text
+    assert '"signature_delta"' in text and "emissary:non-anthropic-reasoning" in text
+    assert '"type": "text"' in text and '"text": "Hel"' in text and '"text": "lo"' in text
+    assert '"type": "tool_use"' in text and '"name": "Read"' in text
+    assert '"input_json_delta"' in text
+    assert '"stop_reason": "tool_use"' in text
+    assert "event: message_stop" in text
+    assert sink["usage"]["completion_tokens"] == 7

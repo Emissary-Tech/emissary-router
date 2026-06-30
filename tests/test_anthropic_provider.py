@@ -5,10 +5,56 @@ import asyncio
 from emissary_router.config import ProviderConfig, ResolvedModel
 from emissary_router.providers.anthropic import AnthropicProvider
 from emissary_router.providers.thinking import (
+    SYNTHETIC_THINKING_SIGNATURE,
     max_effort_for_model,
     normalize_anthropic_thinking_for_model,
 )
 from emissary_router.schemas import AnthropicRequest, RequestContext
+
+
+def test_strip_synthetic_thinking_removes_only_synthetic_blocks() -> None:
+    body = {
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "from glm", "signature": SYNTHETIC_THINKING_SIGNATURE},
+                    {"type": "text", "text": "hello"},
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "native", "signature": "real-anthropic-sig"},
+                    {"type": "text", "text": "world"},
+                ],
+            },
+        ]
+    }
+
+    AnthropicProvider._strip_synthetic_thinking(body)
+
+    assert body["messages"][1]["content"] == [{"type": "text", "text": "hello"}]
+    # a genuine Anthropic thinking block (real signature) is preserved
+    assert body["messages"][2]["content"][0]["type"] == "thinking"
+
+
+def test_strip_synthetic_thinking_keeps_message_non_empty() -> None:
+    body = {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "x", "signature": SYNTHETIC_THINKING_SIGNATURE}
+                ],
+            }
+        ]
+    }
+
+    AnthropicProvider._strip_synthetic_thinking(body)
+
+    assert body["messages"][0]["content"] == [{"type": "text", "text": ""}]
 
 
 def test_anthropic_sse_usage_parses_cache_tokens() -> None:

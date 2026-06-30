@@ -11,7 +11,10 @@ from emissary_router.caching.usage import Usage
 from emissary_router.config import ProviderConfig, ResolvedModel
 from emissary_router.schemas import AnthropicRequest, RequestContext
 from emissary_router.providers.base import ProviderComplete
-from emissary_router.providers.thinking import normalize_anthropic_thinking_for_model
+from emissary_router.providers.thinking import (
+    SYNTHETIC_THINKING_SIGNATURE,
+    normalize_anthropic_thinking_for_model,
+)
 
 CCH_ATTRIBUTION_LINE_RE = re.compile(r"(?m)^.*\bcch=[^\s<>\"]+.*(?:\n|$)")
 
@@ -31,6 +34,9 @@ class AnthropicProvider:
         on_complete: ProviderComplete | None = None,
     ) -> Response:
         body = deepcopy(request.body)
+        # Drop thinking blocks we synthesized from another provider's reasoning on a
+        # prior turn — their signature is not valid to Anthropic and would 400.
+        self._strip_synthetic_thinking(body)
         if self._config.cache.strip_dynamic_attribution:
             self._strip_cch_attribution(body)
         thinking_changes = normalize_anthropic_thinking_for_model(body, model.name)
@@ -113,6 +119,27 @@ class AnthropicProvider:
             cache_read_input_tokens=usage.get("cache_read_input_tokens", 0),
             cache_creation_input_tokens=usage.get("cache_creation_input_tokens", 0),
         )
+
+    @staticmethod
+    def _strip_synthetic_thinking(body: dict) -> None:
+        for message in body.get("messages") or []:
+            if not isinstance(message, dict) or message.get("role") != "assistant":
+                continue
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            kept = [
+                block
+                for block in content
+                if not (
+                    isinstance(block, dict)
+                    and block.get("type") == "thinking"
+                    and block.get("signature") == SYNTHETIC_THINKING_SIGNATURE
+                )
+            ]
+            if len(kept) != len(content):
+                # Anthropic rejects empty assistant content; keep a placeholder.
+                message["content"] = kept or [{"type": "text", "text": ""}]
 
     @staticmethod
     def _strip_cch_attribution(body: dict) -> None:

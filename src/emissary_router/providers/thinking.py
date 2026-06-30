@@ -10,6 +10,13 @@ DEFAULT_MAX_THINKING_BUDGET = 32000
 EFFORT_KEYS = {"effort", "reasoning_effort", "thinking_effort"}
 SKIP_REWRITE_KEYS = {"messages", "system", "tools"}
 
+# Signature stamped on thinking blocks we synthesize from a non-Anthropic provider's
+# reasoning (e.g. OpenRouter/GLM/Kimi). Claude Code surfaces them like any thinking
+# block, but they carry no valid Anthropic signature — so the Anthropic provider strips
+# any history block bearing this marker before forwarding, or Anthropic 400s with
+# "Invalid `signature` in `thinking` block".
+SYNTHETIC_THINKING_SIGNATURE = "emissary:non-anthropic-reasoning"
+
 
 @dataclass(frozen=True)
 class ModelThinkingCapabilities:

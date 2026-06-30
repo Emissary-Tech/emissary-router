@@ -12,6 +12,7 @@ from emissary_router.config import ProviderConfig, ResolvedModel
 from emissary_router.schemas import AnthropicRequest, RequestContext
 from emissary_router.providers.base import ProviderComplete
 from emissary_router.providers.thinking import (
+    SYNTHETIC_THINKING_SIGNATURE,
     accepts_effort_for_model,
     can_disable_thinking_for_model,
     extract_reasoning_settings,
@@ -43,6 +44,15 @@ class OpenRouterProvider:
             "Content-Type": "application/json",
             "X-OpenRouter-Metadata": "enabled",
         }
+
+        if request.body.get("stream"):
+            # True streaming: translate OpenRouter's OpenAI-style SSE into Anthropic SSE
+            # as chunks arrive, so the client sees output live instead of waiting for the
+            # whole (possibly multi-minute, reasoning-heavy) generation to finish.
+            return StreamingResponse(
+                self._translate_stream(oai_body, headers, model.name, on_complete),
+                media_type="text/event-stream",
+            )
 
         async with httpx.AsyncClient(timeout=None) as client:
             response = await client.post(self._base_url, headers=headers, json=oai_body)
@@ -82,9 +92,254 @@ class OpenRouterProvider:
             return JSONResponse(payload, status_code=response.status_code)
 
         message = self.from_openai_response(payload, model.name)
-        if request.body.get("stream"):
-            return StreamingResponse(self.anthropic_sse(message), media_type="text/event-stream")
         return JSONResponse(message)
+
+    async def _translate_stream(
+        self,
+        oai_body: dict[str, Any],
+        headers: dict[str, str],
+        model_label: str,
+        on_complete: ProviderComplete | None,
+    ):
+        """Stream from OpenRouter and translate its SSE into Anthropic SSE in real time."""
+        stream_body = {**oai_body, "stream": True, "stream_options": {"include_usage": True}}
+        status: int | None = None
+        error: str | None = None
+        sink: dict[str, Any] = {}
+        async with httpx.AsyncClient(timeout=None) as client:
+            try:
+                async with client.stream(
+                    "POST", self._base_url, headers=headers, json=stream_body
+                ) as response:
+                    status = response.status_code
+                    if status >= 400:
+                        raw = await response.aread()
+                        try:
+                            err = (json.loads(raw) or {}).get("error") or {}
+                        except (ValueError, AttributeError):
+                            err = {}
+                        error = (
+                            (err.get("message") if isinstance(err, dict) else None)
+                            or raw.decode("utf-8", "replace")[:300]
+                            or "upstream error"
+                        )
+                        yield self._sse(
+                            "error",
+                            {"type": "error", "error": {"type": "api_error", "message": error}},
+                        )
+                        return
+                    async for event in self._iter_anthropic_events(
+                        response.aiter_lines(), model_label, sink
+                    ):
+                        yield event
+            except Exception as exc:  # noqa: BLE001 - record then re-raise to end the stream
+                error = repr(exc)
+                raise
+            finally:
+                self._complete(
+                    on_complete,
+                    self.usage_from_response({"usage": sink.get("usage") or {}}),
+                    {"http_status": status, "stream": True, "error": error},
+                )
+
+    @classmethod
+    async def _iter_anthropic_events(cls, lines, model_label: str, sink: dict[str, Any]):
+        """Translate an async iterator of OpenAI SSE lines into Anthropic SSE byte events.
+
+        Text, reasoning, and tool_use all stream live: reasoning deltas become a thinking
+        block (so Claude Code surfaces them like a native model), closed with a synthetic
+        signature that the Anthropic provider strips from later turns. The observed usage
+        is stashed in `sink["usage"]` for telemetry.
+        """
+        sse = cls._sse
+        next_index = 0
+        cur: tuple[str, int, int | None] | None = None  # (kind, index, oai_tool_index)
+        finish_reason: str | None = None
+        final_usage: dict[str, Any] = {}
+
+        def close_cur() -> list[bytes]:
+            nonlocal cur
+            if cur is None:
+                return []
+            out: list[bytes] = []
+            if cur[0] == "thinking":
+                # Close the thinking block with a signature so the client treats it like a
+                # native thinking block. It's a synthetic marker, not a real Anthropic
+                # signature; the Anthropic provider strips these from later turns.
+                out.append(
+                    sse(
+                        "content_block_delta",
+                        {
+                            "type": "content_block_delta",
+                            "index": cur[1],
+                            "delta": {
+                                "type": "signature_delta",
+                                "signature": SYNTHETIC_THINKING_SIGNATURE,
+                            },
+                        },
+                    )
+                )
+            out.append(sse("content_block_stop", {"type": "content_block_stop", "index": cur[1]}))
+            cur = None
+            return out
+
+        def open_thinking() -> list[bytes]:
+            nonlocal next_index, cur
+            if cur is not None and cur[0] == "thinking":
+                return []
+            out = close_cur()
+            out.append(
+                sse(
+                    "content_block_start",
+                    {
+                        "type": "content_block_start",
+                        "index": next_index,
+                        "content_block": {"type": "thinking", "thinking": ""},
+                    },
+                )
+            )
+            cur = ("thinking", next_index, None)
+            next_index += 1
+            return out
+
+        def open_text() -> list[bytes]:
+            nonlocal next_index, cur
+            if cur is not None and cur[0] == "text":
+                return []
+            out = close_cur()
+            out.append(
+                sse(
+                    "content_block_start",
+                    {
+                        "type": "content_block_start",
+                        "index": next_index,
+                        "content_block": {"type": "text", "text": ""},
+                    },
+                )
+            )
+            cur = ("text", next_index, None)
+            next_index += 1
+            return out
+
+        def open_tool(oai_idx: int, tool_id: str | None, name: str | None) -> list[bytes]:
+            nonlocal next_index, cur
+            out = close_cur()
+            out.append(
+                sse(
+                    "content_block_start",
+                    {
+                        "type": "content_block_start",
+                        "index": next_index,
+                        "content_block": {
+                            "type": "tool_use",
+                            "id": tool_id or f"toolu_{uuid.uuid4().hex[:24]}",
+                            "name": name or "unknown_tool",
+                            "input": {},
+                        },
+                    },
+                )
+            )
+            cur = ("tool", next_index, oai_idx)
+            next_index += 1
+            return out
+
+        yield sse(
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": f"msg_{uuid.uuid4().hex[:24]}",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": model_label,
+                    "content": [],
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {
+                        "input_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation_input_tokens": 0,
+                        "output_tokens": 0,
+                    },
+                },
+            },
+        )
+
+        async for line in lines:
+            if not line or not line.startswith("data:"):
+                continue
+            data = line[len("data:"):].strip()
+            if data == "[DONE]":
+                break
+            try:
+                obj = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            if obj.get("usage"):
+                final_usage = obj["usage"]
+            choices = obj.get("choices") or []
+            if not choices:
+                continue
+            choice = choices[0]
+            if choice.get("finish_reason"):
+                finish_reason = choice["finish_reason"]
+            delta = choice.get("delta") or {}
+
+            reasoning = delta.get("reasoning")
+            if reasoning:
+                for event in open_thinking():
+                    yield event
+                yield sse(
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": cur[1],
+                        "delta": {"type": "thinking_delta", "thinking": reasoning},
+                    },
+                )
+
+            content = delta.get("content")
+            if content:
+                for event in open_text():
+                    yield event
+                yield sse(
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": cur[1],
+                        "delta": {"type": "text_delta", "text": content},
+                    },
+                )
+
+            for tool_call in delta.get("tool_calls") or []:
+                oai_idx = tool_call.get("index", 0)
+                fn = tool_call.get("function") or {}
+                if cur is None or cur[0] != "tool" or cur[2] != oai_idx:
+                    for event in open_tool(oai_idx, tool_call.get("id"), fn.get("name")):
+                        yield event
+                args = fn.get("arguments")
+                if args:
+                    yield sse(
+                        "content_block_delta",
+                        {
+                            "type": "content_block_delta",
+                            "index": cur[1],
+                            "delta": {"type": "input_json_delta", "partial_json": args},
+                        },
+                    )
+
+        for event in close_cur():
+            yield event
+        yield sse(
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": cls._stop_reason(finish_reason), "stop_sequence": None},
+                "usage": {"output_tokens": int(final_usage.get("completion_tokens") or 0)},
+            },
+        )
+        yield sse("message_stop", {"type": "message_stop"})
+        sink["usage"] = final_usage
 
     def usage_from_response(self, payload: dict) -> Usage:
         usage = payload.get("usage", {}) or {}
