@@ -49,6 +49,10 @@ class AnthropicProvider:
         on_complete: ProviderComplete | None = None,
     ) -> Response:
         body = deepcopy(request.body)
+        # Claude Code (targeting a newer model) can put a role:"system" message inside
+        # `messages`; an older served model rejects it ("role 'system' is not supported
+        # on this model"). Move that content into the top-level `system` field.
+        self._hoist_system_messages(body)
         # Drop thinking blocks we synthesized from another provider's reasoning on a
         # prior turn — their signature is not valid to Anthropic and would 400.
         self._strip_synthetic_thinking(body)
@@ -148,6 +152,39 @@ class AnthropicProvider:
             cache_read_input_tokens=usage.get("cache_read_input_tokens", 0),
             cache_creation_input_tokens=usage.get("cache_creation_input_tokens", 0),
         )
+
+    @staticmethod
+    def _hoist_system_messages(body: dict) -> None:
+        messages = body.get("messages")
+        if not isinstance(messages, list):
+            return
+        hoisted: list[dict] = []
+        remaining: list = []
+        for message in messages:
+            if isinstance(message, dict) and message.get("role") == "system":
+                content = message.get("content")
+                if isinstance(content, str):
+                    if content:
+                        hoisted.append({"type": "text", "text": content})
+                elif isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict):
+                            hoisted.append(block)
+                        elif isinstance(block, str) and block:
+                            hoisted.append({"type": "text", "text": block})
+            else:
+                remaining.append(message)
+        if not hoisted:
+            return
+        body["messages"] = remaining
+        existing = body.get("system")
+        if isinstance(existing, str):
+            existing = [{"type": "text", "text": existing}] if existing else []
+        elif isinstance(existing, list):
+            existing = list(existing)
+        else:
+            existing = []
+        body["system"] = existing + hoisted
 
     @staticmethod
     def _strip_synthetic_thinking(body: dict) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from typing import Any
 
@@ -20,6 +21,19 @@ from emissary_router.providers.thinking import (
     normalize_effort,
     thinking_budget_from_max_tokens,
 )
+
+
+logger = logging.getLogger(__name__)
+
+
+def _request_summary(oai_body: dict[str, Any]) -> str:
+    messages = oai_body.get("messages") or []
+    roles = [m.get("role") for m in messages if isinstance(m, dict)]
+    return (
+        f"model={oai_body.get('model')} stream={bool(oai_body.get('stream'))} "
+        f"msg_roles={roles} tools={len(oai_body.get('tools') or [])} "
+        f"reasoning={oai_body.get('reasoning')} top_keys={sorted(oai_body.keys())}"
+    )
 
 
 class OpenRouterProvider:
@@ -56,6 +70,14 @@ class OpenRouterProvider:
 
         async with httpx.AsyncClient(timeout=None) as client:
             response = await client.post(self._base_url, headers=headers, json=oai_body)
+
+        if response.status_code >= 400:
+            logger.warning(
+                "openrouter upstream %s | %s | error_body=%s",
+                response.status_code,
+                _request_summary(oai_body),
+                response.text[:800],
+            )
 
         try:
             payload = response.json()
@@ -122,6 +144,12 @@ class OpenRouterProvider:
                             (err.get("message") if isinstance(err, dict) else None)
                             or raw.decode("utf-8", "replace")[:300]
                             or "upstream error"
+                        )
+                        logger.warning(
+                            "openrouter upstream %s | %s | error_body=%s",
+                            status,
+                            _request_summary(stream_body),
+                            raw.decode("utf-8", "replace")[:800],
                         )
                         yield self._sse(
                             "error",
@@ -509,12 +537,26 @@ class OpenRouterProvider:
     @classmethod
     def _messages(cls, body: dict[str, Any]) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = []
-        system = cls._stringify(body.get("system"))
-        if system:
-            messages.append({"role": "system", "content": system})
+        # Fold the top-level system AND any role:"system" messages (Claude Code sends
+        # those for newer models) into one leading system message. OpenAI-format
+        # providers take system content this way, and dropping the inline ones would lose
+        # instructions (the reminders CC injects).
+        system_parts: list[str] = []
+        top_system = cls._stringify(body.get("system"))
+        if top_system:
+            system_parts.append(top_system)
+        for message in body.get("messages", []) or []:
+            if isinstance(message, dict) and message.get("role") == "system":
+                inline = cls._stringify(message.get("content"))
+                if inline:
+                    system_parts.append(inline)
+        if system_parts:
+            messages.append({"role": "system", "content": "\n\n".join(system_parts)})
 
         for message in body.get("messages", []) or []:
             role = message.get("role")
+            if role == "system":
+                continue  # already folded into the leading system message above
             blocks = cls._blocks(message.get("content"))
 
             if role == "assistant":

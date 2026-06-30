@@ -12,6 +12,33 @@ from emissary_router.providers.thinking import (
 from emissary_router.schemas import AnthropicRequest, RequestContext
 
 
+def test_hoist_system_messages_moves_into_top_level_system() -> None:
+    body = {
+        "system": [{"type": "text", "text": "main system"}],
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "system", "content": "<system-reminder>be concise</system-reminder>"},
+        ],
+    }
+
+    AnthropicProvider._hoist_system_messages(body)
+
+    assert [m["role"] for m in body["messages"]] == ["user"]
+    assert body["system"] == [
+        {"type": "text", "text": "main system"},
+        {"type": "text", "text": "<system-reminder>be concise</system-reminder>"},
+    ]
+
+
+def test_hoist_system_messages_noop_when_no_system_role() -> None:
+    import copy
+
+    body = {"system": "s", "messages": [{"role": "user", "content": "hi"}]}
+    before = copy.deepcopy(body)
+    AnthropicProvider._hoist_system_messages(body)
+    assert body == before
+
+
 def test_strip_synthetic_thinking_removes_only_synthetic_blocks() -> None:
     body = {
         "messages": [

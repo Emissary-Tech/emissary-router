@@ -306,6 +306,20 @@ def test_openrouter_anthropic_sse_contains_cache_usage() -> None:
     assert '"output_tokens": 5' in sse
 
 
+def test_openrouter_folds_inline_system_message_into_system() -> None:
+    body = {
+        "system": "main system",
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "system", "content": "<system-reminder>be concise</system-reminder>"},
+        ],
+    }
+    msgs = OpenRouterProvider._messages(body)
+    assert [m["role"] for m in msgs] == ["system", "user"]  # no stray/dropped system role
+    assert "main system" in msgs[0]["content"]
+    assert "be concise" in msgs[0]["content"]  # inline reminder preserved, not dropped
+
+
 def test_openrouter_stream_translation_reasoning_text_and_tools() -> None:
     import asyncio
     import json as _json
