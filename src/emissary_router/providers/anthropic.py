@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from copy import deepcopy
 
@@ -17,6 +18,20 @@ from emissary_router.providers.thinking import (
 )
 
 CCH_ATTRIBUTION_LINE_RE = re.compile(r"(?m)^.*\bcch=[^\s<>\"]+.*(?:\n|$)")
+
+logger = logging.getLogger(__name__)
+
+
+def _request_summary(body: dict) -> str:
+    messages = body.get("messages") or []
+    roles = [m.get("role") for m in messages if isinstance(m, dict)]
+    system = body.get("system")
+    system_kind = "list" if isinstance(system, list) else ("str" if isinstance(system, str) else "none")
+    return (
+        f"model={body.get('model')} stream={bool(body.get('stream'))} "
+        f"msg_roles={roles} system={system_kind} thinking={body.get('thinking')} "
+        f"top_keys={sorted(body.keys())}"
+    )
 
 
 class AnthropicProvider:
@@ -67,6 +82,13 @@ class AnthropicProvider:
                         error = repr(exc)
                         raise
                     finally:
+                        if status is not None and status >= 400:
+                            logger.warning(
+                                "anthropic upstream %s | %s | error_body=%s",
+                                status,
+                                _request_summary(body),
+                                buf.decode("utf-8", "replace")[:800],
+                            )
                         self._complete(
                             on_complete,
                             self._usage_from_sse(buf.decode("utf-8", "replace")),
@@ -82,6 +104,13 @@ class AnthropicProvider:
 
         async with httpx.AsyncClient(timeout=None) as client:
             response = await client.post(f"{self._base_url}/v1/messages", headers=headers, json=body)
+        if response.status_code >= 400:
+            logger.warning(
+                "anthropic upstream %s | %s | error_body=%s",
+                response.status_code,
+                _request_summary(body),
+                response.text[:800],
+            )
         try:
             payload = response.json()
             self._complete(
