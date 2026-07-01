@@ -281,31 +281,6 @@ def test_openrouter_response_maps_tool_call_and_cache_usage() -> None:
     assert message["content"][1]["type"] == "tool_use"
 
 
-def test_openrouter_anthropic_sse_contains_cache_usage() -> None:
-    message = {
-        "id": "msg_1",
-        "type": "message",
-        "role": "assistant",
-        "model": "gemini-3.1-flash-lite",
-        "content": [{"type": "text", "text": "done"}],
-        "stop_reason": "end_turn",
-        "stop_sequence": None,
-        "usage": {
-            "input_tokens": 200,
-            "output_tokens": 5,
-            "cache_read_input_tokens": 700,
-            "cache_creation_input_tokens": 100,
-        },
-    }
-
-    sse = b"".join(OpenRouterProvider.anthropic_sse(message)).decode()
-
-    assert "message_start" in sse
-    assert '"cache_read_input_tokens": 700' in sse
-    assert '"cache_creation_input_tokens": 100' in sse
-    assert '"output_tokens": 5' in sse
-
-
 def test_reasoning_text_prefers_flat_then_details_no_dup() -> None:
     from emissary_router.providers.openrouter import _reasoning_text
 
@@ -331,7 +306,10 @@ def test_from_openai_response_surfaces_reasoning_as_thinking() -> None:
     assert msg["content"][1]["text"] == "the answer"
 
 
-def test_openrouter_folds_inline_system_message_into_system() -> None:
+def test_openrouter_trailing_system_becomes_positioned_user_reminder() -> None:
+    # Mid/trailing role:system messages must NOT fold into the leading system message:
+    # that would rewrite the prompt head each turn and bust the prefix-matched prompt
+    # cache. They convert in place to a user message; content is preserved either way.
     body = {
         "system": "main system",
         "messages": [
@@ -340,9 +318,23 @@ def test_openrouter_folds_inline_system_message_into_system() -> None:
         ],
     }
     msgs = OpenRouterProvider._messages(body)
-    assert [m["role"] for m in msgs] == ["system", "user"]  # no stray/dropped system role
-    assert "main system" in msgs[0]["content"]
-    assert "be concise" in msgs[0]["content"]  # inline reminder preserved, not dropped
+    assert [m["role"] for m in msgs] == ["system", "user", "user"]
+    assert msgs[0]["content"] == "main system"  # head unchanged -> cache prefix stable
+    assert "be concise" in msgs[2]["content"]  # reminder preserved at its position
+    assert msgs[2]["content"].count("<system-reminder") == 1  # no double-wrap
+
+
+def test_openrouter_leading_system_message_folds_into_system() -> None:
+    body = {
+        "system": "main system",
+        "messages": [
+            {"role": "system", "content": "extra setup"},
+            {"role": "user", "content": "hi"},
+        ],
+    }
+    msgs = OpenRouterProvider._messages(body)
+    assert [m["role"] for m in msgs] == ["system", "user"]
+    assert "main system" in msgs[0]["content"] and "extra setup" in msgs[0]["content"]
 
 
 def test_openrouter_stream_translation_reasoning_text_and_tools() -> None:
@@ -388,3 +380,38 @@ def test_openrouter_stream_translation_reasoning_text_and_tools() -> None:
     assert '"stop_reason": "tool_use"' in text
     assert "event: message_stop" in text
     assert sink["usage"]["completion_tokens"] == 7
+    # the final message_delta backfills CUMULATIVE usage so the client sees real
+    # input tokens (message_start had to carry zeros — usage arrives at stream end)
+    delta_part = text.split('"type": "message_delta"', 1)[1]
+    assert '"input_tokens": 12' in delta_part
+    assert '"output_tokens": 7' in delta_part
+
+
+def test_openrouter_stream_records_usage_before_trailing_events() -> None:
+    # A cancel/drop after the usage chunk but before message_stop must still record
+    # real usage in sink (telemetry), not zeros.
+    import asyncio
+    import json as _json
+
+    chunks = [
+        {"choices": [{"delta": {"content": "hi"}}]},
+        {"choices": [], "usage": {"prompt_tokens": 40, "completion_tokens": 9}},
+    ]
+    lines = ["data: " + _json.dumps(c) for c in chunks]  # no [DONE]: stream severed early
+
+    async def aiter():
+        for line in lines:
+            yield line
+        raise RuntimeError("connection reset mid-stream")
+
+    async def run():
+        sink: dict = {}
+        try:
+            async for _ in OpenRouterProvider._iter_anthropic_events(aiter(), "glm-5.2", sink):
+                pass
+        except RuntimeError:
+            pass
+        return sink
+
+    sink = asyncio.run(run())
+    assert sink["usage"]["prompt_tokens"] == 40  # recorded the moment it arrived

@@ -16,6 +16,7 @@ from emissary_router.providers.thinking import (
     SYNTHETIC_THINKING_SIGNATURE,
     accepts_effort_for_model,
     can_disable_thinking_for_model,
+    clamp_max_tokens_for_model,
     extract_reasoning_settings,
     max_effort_for_model,
     normalize_effort,
@@ -78,11 +79,11 @@ class OpenRouterProvider:
         if request.body.get("stream"):
             # True streaming: translate OpenRouter's OpenAI-style SSE into Anthropic SSE
             # as chunks arrive, so the client sees output live instead of waiting for the
-            # whole (possibly multi-minute, reasoning-heavy) generation to finish.
-            return StreamingResponse(
-                self._translate_stream(oai_body, headers, model.name, on_complete),
-                media_type="text/event-stream",
-            )
+            # whole (possibly multi-minute, reasoning-heavy) generation to finish. The
+            # upstream stream is opened BEFORE we commit our own response so a pre-body
+            # upstream error (429/401/5xx) is returned with its real HTTP status —
+            # status-based client handling (rate-limit backoff, auth errors) keeps working.
+            return await self._open_stream(oai_body, headers, model.name, on_complete)
 
         async with httpx.AsyncClient(timeout=None) as client:
             response = await client.post(self._base_url, headers=headers, json=oai_body)
@@ -132,59 +133,104 @@ class OpenRouterProvider:
         message = self.from_openai_response(payload, model.name)
         return JSONResponse(message)
 
-    async def _translate_stream(
+    async def _open_stream(
         self,
         oai_body: dict[str, Any],
         headers: dict[str, str],
         model_label: str,
         on_complete: ProviderComplete | None,
-    ):
-        """Stream from OpenRouter and translate its SSE into Anthropic SSE in real time."""
+    ) -> Response:
+        """Open the upstream stream, then decide the response shape.
+
+        Pre-body upstream errors return a JSONResponse with the REAL status code so
+        status-based client handling (429 backoff, 401 surfacing) still works; only a
+        2xx upstream hands off to the SSE translator.
+        """
         stream_body = {**oai_body, "stream": True, "stream_options": {"include_usage": True}}
-        status: int | None = None
+        client = httpx.AsyncClient(timeout=None)
+        try:
+            request = client.build_request(
+                "POST", self._base_url, headers=headers, json=stream_body
+            )
+            response = await client.send(request, stream=True)
+        except Exception:
+            await client.aclose()
+            raise
+
+        if response.status_code >= 400:
+            status = response.status_code
+            raw = await response.aread()
+            await response.aclose()
+            await client.aclose()
+            text = raw.decode("utf-8", "replace")
+            logger.warning(
+                "openrouter upstream %s | %s | error_body=%s",
+                status,
+                _request_summary(stream_body),
+                text[:800],
+            )
+            self._complete(
+                on_complete,
+                Usage(),
+                {"http_status": status, "stream": True, "error": (text or "upstream error")[:300]},
+            )
+            try:
+                payload = json.loads(text)
+            except ValueError:
+                payload = {"error": {"type": "api_error", "message": (text or "upstream error")[:300]}}
+            return JSONResponse(payload, status_code=status)
+
+        return StreamingResponse(
+            self._translate_stream(client, response, stream_body, model_label, on_complete),
+            media_type="text/event-stream",
+        )
+
+    async def _translate_stream(
+        self,
+        client: httpx.AsyncClient,
+        response: httpx.Response,
+        stream_body: dict[str, Any],
+        model_label: str,
+        on_complete: ProviderComplete | None,
+    ):
+        """Translate an already-open (2xx) OpenRouter SSE stream into Anthropic SSE live."""
+        status = response.status_code
         error: str | None = None
         sink: dict[str, Any] = {}
-        async with httpx.AsyncClient(timeout=None) as client:
+        try:
+            async for event in self._iter_anthropic_events(
+                response.aiter_lines(), model_label, sink
+            ):
+                yield event
+        except Exception as exc:  # noqa: BLE001 - surface in-stream, then end cleanly
+            # GeneratorExit/CancelledError are BaseException and bypass this branch, so
+            # we only get here for real upstream/translation failures while the client
+            # is still listening: send a terminal error event instead of severing the
+            # socket mid-stream (which clients report as a cryptic parse failure).
+            error = repr(exc)
+            logger.warning(
+                "openrouter upstream stream failed | %s | error=%s",
+                _request_summary(stream_body),
+                error,
+            )
+            yield self._sse(
+                "error",
+                {
+                    "type": "error",
+                    "error": {"type": "api_error", "message": f"upstream stream failed: {error}"},
+                },
+            )
+        finally:
             try:
-                async with client.stream(
-                    "POST", self._base_url, headers=headers, json=stream_body
-                ) as response:
-                    status = response.status_code
-                    if status >= 400:
-                        raw = await response.aread()
-                        try:
-                            err = (json.loads(raw) or {}).get("error") or {}
-                        except (ValueError, AttributeError):
-                            err = {}
-                        error = (
-                            (err.get("message") if isinstance(err, dict) else None)
-                            or raw.decode("utf-8", "replace")[:300]
-                            or "upstream error"
-                        )
-                        logger.warning(
-                            "openrouter upstream %s | %s | error_body=%s",
-                            status,
-                            _request_summary(stream_body),
-                            raw.decode("utf-8", "replace")[:800],
-                        )
-                        yield self._sse(
-                            "error",
-                            {"type": "error", "error": {"type": "api_error", "message": error}},
-                        )
-                        return
-                    async for event in self._iter_anthropic_events(
-                        response.aiter_lines(), model_label, sink
-                    ):
-                        yield event
-            except Exception as exc:  # noqa: BLE001 - record then re-raise to end the stream
-                error = repr(exc)
-                raise
-            finally:
-                self._complete(
-                    on_complete,
-                    self.usage_from_response({"usage": sink.get("usage") or {}}),
-                    {"http_status": status, "stream": True, "error": error},
-                )
+                await response.aclose()
+                await client.aclose()
+            except Exception:  # noqa: BLE001 - never mask the original outcome on cleanup
+                pass
+            self._complete(
+                on_complete,
+                self.usage_from_response({"usage": sink.get("usage") or {}}),
+                {"http_status": status, "stream": True, "error": error},
+            )
 
     @classmethod
     async def _iter_anthropic_events(cls, lines, model_label: str, sink: dict[str, Any]):
@@ -320,7 +366,11 @@ class OpenRouterProvider:
             except json.JSONDecodeError:
                 continue
             if obj.get("usage"):
+                # Record the moment usage arrives: a client cancel or upstream drop
+                # during the trailing events must not zero out telemetry for a
+                # generation the provider already billed.
                 final_usage = obj["usage"]
+                sink["usage"] = final_usage
             choices = obj.get("choices") or []
             if not choices:
                 continue
@@ -374,12 +424,16 @@ class OpenRouterProvider:
 
         for event in close_cur():
             yield event
+        # Cumulative usage in the final message_delta (the protocol-sanctioned backfill
+        # point): OpenAI-format usage only arrives at stream end, so message_start had
+        # to carry zeros — without this the client would never see input/cache tokens
+        # (context-window tracking and cost display would read an empty prompt).
         yield sse(
             "message_delta",
             {
                 "type": "message_delta",
                 "delta": {"stop_reason": cls._stop_reason(finish_reason), "stop_sequence": None},
-                "usage": {"output_tokens": int(final_usage.get("completion_tokens") or 0)},
+                "usage": cls._usage_payload(final_usage),
             },
         )
         yield sse("message_stop", {"type": "message_stop"})
@@ -410,6 +464,15 @@ class OpenRouterProvider:
         context: RequestContext | None = None,
         model_name: str | None = None,
     ) -> dict[str, Any]:
+        if model_name:
+            # Clamp max_tokens (and any explicit thinking budget) to the served model's
+            # output ceiling on a copy — the caller's body stays untouched. Matters for
+            # Claude models served via OpenRouter; OpenRouter-only models have no
+            # catalog ceiling and are clamped upstream.
+            body = {**body}
+            if isinstance(body.get("thinking"), dict):
+                body["thinking"] = dict(body["thinking"])
+            clamp_max_tokens_for_model(body, model_name)
         request: dict[str, Any] = {
             "model": model_id,
             "messages": cls._messages(body),
@@ -490,101 +553,45 @@ class OpenRouterProvider:
         }
 
     @classmethod
-    def anthropic_sse(cls, message: dict[str, Any]):
-        skeleton = {
-            **message,
-            "content": [],
-            "stop_reason": None,
-            "usage": {
-                "input_tokens": message["usage"].get("input_tokens", 0),
-                "cache_read_input_tokens": message["usage"].get("cache_read_input_tokens", 0),
-                "cache_creation_input_tokens": message["usage"].get("cache_creation_input_tokens", 0),
-                "output_tokens": 0,
-            },
-        }
-        yield cls._sse("message_start", {"type": "message_start", "message": skeleton})
-
-        for index, block in enumerate(message["content"]):
-            if block["type"] == "text":
-                yield cls._sse(
-                    "content_block_start",
-                    {
-                        "type": "content_block_start",
-                        "index": index,
-                        "content_block": {"type": "text", "text": ""},
-                    },
-                )
-                yield cls._sse(
-                    "content_block_delta",
-                    {
-                        "type": "content_block_delta",
-                        "index": index,
-                        "delta": {"type": "text_delta", "text": block["text"]},
-                    },
-                )
-            else:
-                yield cls._sse(
-                    "content_block_start",
-                    {
-                        "type": "content_block_start",
-                        "index": index,
-                        "content_block": {
-                            "type": "tool_use",
-                            "id": block["id"],
-                            "name": block["name"],
-                            "input": {},
-                        },
-                    },
-                )
-                yield cls._sse(
-                    "content_block_delta",
-                    {
-                        "type": "content_block_delta",
-                        "index": index,
-                        "delta": {
-                            "type": "input_json_delta",
-                            "partial_json": json.dumps(block.get("input") or {}, ensure_ascii=False),
-                        },
-                    },
-                )
-            yield cls._sse("content_block_stop", {"type": "content_block_stop", "index": index})
-
-        yield cls._sse(
-            "message_delta",
-            {
-                "type": "message_delta",
-                "delta": {
-                    "stop_reason": message["stop_reason"],
-                    "stop_sequence": message.get("stop_sequence"),
-                },
-                "usage": {"output_tokens": message["usage"].get("output_tokens", 0)},
-            },
-        )
-        yield cls._sse("message_stop", {"type": "message_stop"})
-
-    @classmethod
     def _messages(cls, body: dict[str, Any]) -> list[dict[str, Any]]:
+        # Top-level system plus LEADING role:"system" messages fold into one leading
+        # system message (OpenAI format). MID/TRAILING role:"system" messages are
+        # per-turn reminders Claude Code injects: convert them in place to user
+        # messages so the prompt head stays byte-stable — folding them to the front
+        # would bust the provider's prefix-matched prompt cache every time a reminder
+        # changes, and would misrepresent a per-turn note as a global preamble.
         messages: list[dict[str, Any]] = []
-        # Fold the top-level system AND any role:"system" messages (Claude Code sends
-        # those for newer models) into one leading system message. OpenAI-format
-        # providers take system content this way, and dropping the inline ones would lose
-        # instructions (the reminders CC injects).
+        body_messages: list[dict[str, Any]] = []
         system_parts: list[str] = []
         top_system = cls._stringify(body.get("system"))
         if top_system:
             system_parts.append(top_system)
-        for message in body.get("messages", []) or []:
-            if isinstance(message, dict) and message.get("role") == "system":
-                inline = cls._stringify(message.get("content"))
-                if inline:
-                    system_parts.append(inline)
-        if system_parts:
-            messages.append({"role": "system", "content": "\n\n".join(system_parts)})
 
+        leading = True
         for message in body.get("messages", []) or []:
             role = message.get("role")
             if role == "system":
-                continue  # already folded into the leading system message above
+                inline = cls._stringify(message.get("content"))
+                if not inline:
+                    continue
+                if leading:
+                    system_parts.append(inline)
+                else:
+                    if "<system-reminder" not in inline:
+                        inline = f"<system-reminder>\n{inline}\n</system-reminder>"
+                    body_messages.append({"role": "user", "content": inline})
+                continue
+            leading = False
+            body_messages.append(message)
+
+        if system_parts:
+            messages.append({"role": "system", "content": "\n\n".join(system_parts)})
+
+        for message in body_messages:
+            role = message.get("role")
+            if role == "user" and isinstance(message.get("content"), str):
+                messages.append(message)
+                continue
             blocks = cls._blocks(message.get("content"))
 
             if role == "assistant":

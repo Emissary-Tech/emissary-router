@@ -29,6 +29,16 @@ def _config(**overrides) -> AppConfig:
     return AppConfig.model_validate(raw)
 
 
+def test_thinking_capabilities_cover_exactly_the_catalog() -> None:
+    # CATALOG and THINKING_CAPABILITIES are separate dicts keyed by model name, and a
+    # missing capabilities entry silently defaults to can_disable_thinking=True — which
+    # would 400 every background call routed to a forgotten always-on-reasoning model
+    # ("Reasoning is mandatory ... cannot be disabled"). Keep the key sets identical.
+    from emissary_router.providers.thinking import THINKING_CAPABILITIES
+
+    assert set(THINKING_CAPABILITIES) == set(CATALOG)
+
+
 def test_glm_and_kimi_are_openrouter_only_with_expected_pricing() -> None:
     glm = CATALOG["glm-5.2"]
     assert glm.providers == {"openrouter": "z-ai/glm-5.2"}

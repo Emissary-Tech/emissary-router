@@ -14,12 +14,43 @@ from emissary_router.schemas import AnthropicRequest, RequestContext
 from emissary_router.providers.base import ProviderComplete
 from emissary_router.providers.thinking import (
     SYNTHETIC_THINKING_SIGNATURE,
+    clamp_max_tokens_for_model,
     normalize_anthropic_thinking_for_model,
 )
 
 CCH_ATTRIBUTION_LINE_RE = re.compile(r"(?m)^.*\bcch=[^\s<>\"]+.*(?:\n|$)")
 
 logger = logging.getLogger(__name__)
+
+
+def _system_blocks(content) -> list[dict]:
+    """Normalize a system message's content (str / dict / list) to Anthropic blocks."""
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}] if content else []
+    if isinstance(content, dict):
+        return [content]
+    if isinstance(content, list):
+        return [
+            block if isinstance(block, dict) else {"type": "text", "text": str(block)}
+            for block in content
+            if block
+        ]
+    return []
+
+
+def _system_text(content) -> str:
+    """Flatten a system message's content to plain text (for reminder conversion)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict):
+        return content.get("text", "") if content.get("type") == "text" else ""
+    if isinstance(content, list):
+        return "\n".join(
+            block.get("text", "")
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        ).strip()
+    return ""
 
 
 def _request_summary(body: dict) -> str:
@@ -58,6 +89,9 @@ class AnthropicProvider:
         self._strip_synthetic_thinking(body)
         if self._config.cache.strip_dynamic_attribution:
             self._strip_cch_attribution(body)
+        # Clamp BEFORE thinking normalization: adaptive->budget conversion derives the
+        # budget from max_tokens, so it must see the served model's real ceiling.
+        clamp_max_tokens_for_model(body, model.name)
         thinking_changes = normalize_anthropic_thinking_for_model(body, model.name)
         body["model"] = model.model_id
         headers = self._forward_headers(request.headers)
@@ -155,45 +189,66 @@ class AnthropicProvider:
 
     @staticmethod
     def _hoist_system_messages(body: dict) -> None:
+        """Normalize role:"system" messages for models that reject them inline.
+
+        LEADING system messages (before any user/assistant turn) are the initial system
+        prompt — they belong in the top-level `system` field. MID/TRAILING ones are
+        per-turn reminders: they are converted IN PLACE to user messages wrapped in
+        <system-reminder> tags. Hoisting those to the head would rewrite the first
+        bytes of the prompt whenever a reminder changes, invalidating the provider's
+        prefix-matched prompt cache for the entire conversation.
+        """
         messages = body.get("messages")
         if not isinstance(messages, list):
             return
         hoisted: list[dict] = []
         remaining: list = []
+        leading = True
+        changed = False
         for message in messages:
-            if isinstance(message, dict) and message.get("role") == "system":
-                content = message.get("content")
-                if isinstance(content, str):
-                    if content:
-                        hoisted.append({"type": "text", "text": content})
-                elif isinstance(content, list):
-                    for block in content:
-                        if isinstance(block, dict):
-                            hoisted.append(block)
-                        elif isinstance(block, str) and block:
-                            hoisted.append({"type": "text", "text": block})
-            else:
+            if not (isinstance(message, dict) and message.get("role") == "system"):
+                if isinstance(message, dict) and message.get("role") in ("user", "assistant"):
+                    leading = False
                 remaining.append(message)
-        if not hoisted:
+                continue
+            changed = True
+            if leading:
+                hoisted.extend(_system_blocks(message.get("content")))
+            else:
+                text = _system_text(message.get("content"))
+                if text:
+                    if "<system-reminder" not in text:
+                        text = f"<system-reminder>\n{text}\n</system-reminder>"
+                    remaining.append({"role": "user", "content": [{"type": "text", "text": text}]})
+        if not changed:
             return
         body["messages"] = remaining
-        existing = body.get("system")
-        if isinstance(existing, str):
-            existing = [{"type": "text", "text": existing}] if existing else []
-        elif isinstance(existing, list):
-            existing = list(existing)
-        else:
-            existing = []
-        body["system"] = existing + hoisted
+        if hoisted:
+            existing = body.get("system")
+            if isinstance(existing, str):
+                existing = [{"type": "text", "text": existing}] if existing else []
+            elif isinstance(existing, list):
+                existing = list(existing)
+            else:
+                existing = []
+            body["system"] = existing + hoisted
 
     @staticmethod
     def _strip_synthetic_thinking(body: dict) -> None:
-        for message in body.get("messages") or []:
-            if not isinstance(message, dict) or message.get("role") != "assistant":
+        messages = body.get("messages")
+        if not isinstance(messages, list):
+            return
+        cleaned: list = []
+        changed = False
+        for message in messages:
+            if not (
+                isinstance(message, dict)
+                and message.get("role") == "assistant"
+                and isinstance(message.get("content"), list)
+            ):
+                cleaned.append(message)
                 continue
-            content = message.get("content")
-            if not isinstance(content, list):
-                continue
+            content = message["content"]
             kept = [
                 block
                 for block in content
@@ -203,9 +258,18 @@ class AnthropicProvider:
                     and block.get("signature") == SYNTHETIC_THINKING_SIGNATURE
                 )
             ]
-            if len(kept) != len(content):
-                # Anthropic rejects empty assistant content; keep a placeholder.
-                message["content"] = kept or [{"type": "text", "text": ""}]
+            if len(kept) == len(content):
+                cleaned.append(message)
+                continue
+            changed = True
+            if kept:
+                message["content"] = kept
+                cleaned.append(message)
+            # else: drop the message entirely. An empty-text placeholder is NOT an
+            # option — Anthropic 400s with "text content blocks must be non-empty" —
+            # and consecutive user turns are accepted (merged), so dropping is safe.
+        if changed:
+            body["messages"] = cleaned
 
     @staticmethod
     def _strip_cch_attribution(body: dict) -> None:

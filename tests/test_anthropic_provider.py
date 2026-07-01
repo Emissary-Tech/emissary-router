@@ -12,7 +12,33 @@ from emissary_router.providers.thinking import (
 from emissary_router.schemas import AnthropicRequest, RequestContext
 
 
-def test_hoist_system_messages_moves_into_top_level_system() -> None:
+def test_clamp_max_tokens_to_served_model_ceiling() -> None:
+    # A fable-configured Claude Code sends max_tokens=128000; haiku-4.5's ceiling is
+    # 64000 (live-verified 400 above it). Clamp must also shrink an explicit thinking
+    # budget so budget < max_tokens still holds.
+    from emissary_router.providers.thinking import clamp_max_tokens_for_model
+
+    body = {"max_tokens": 128000, "thinking": {"type": "enabled", "budget_tokens": 127999}}
+    clamp_max_tokens_for_model(body, "claude-haiku-4.5")
+    assert body["max_tokens"] == 64000
+    assert body["thinking"]["budget_tokens"] == 63999
+
+    # Under the ceiling: untouched.
+    body2 = {"max_tokens": 32000, "thinking": {"type": "enabled", "budget_tokens": 31999}}
+    clamp_max_tokens_for_model(body2, "claude-haiku-4.5")
+    assert body2["max_tokens"] == 32000 and body2["thinking"]["budget_tokens"] == 31999
+
+    # No catalog ceiling (OpenRouter-served models): untouched.
+    body3 = {"max_tokens": 128000}
+    clamp_max_tokens_for_model(body3, "glm-5.2")
+    assert body3["max_tokens"] == 128000
+
+
+def test_hoist_trailing_system_becomes_positioned_user_reminder() -> None:
+    # Trailing role:system reminders must NOT be hoisted to the top-level system field:
+    # system precedes messages in the prompt, so a changing reminder would rewrite the
+    # prompt head each turn and invalidate the whole prompt-cache prefix. Convert in
+    # place to a user message instead; the top-level system stays byte-stable.
     body = {
         "system": [{"type": "text", "text": "main system"}],
         "messages": [
@@ -23,10 +49,28 @@ def test_hoist_system_messages_moves_into_top_level_system() -> None:
 
     AnthropicProvider._hoist_system_messages(body)
 
+    assert body["system"] == [{"type": "text", "text": "main system"}]  # head unchanged
+    assert [m["role"] for m in body["messages"]] == ["user", "user"]
+    reminder = body["messages"][1]["content"][0]["text"]
+    assert "be concise" in reminder
+    assert reminder.count("<system-reminder") == 1  # already-wrapped content not re-wrapped
+
+
+def test_hoist_leading_system_message_moves_into_top_level_system() -> None:
+    body = {
+        "system": "main system",
+        "messages": [
+            {"role": "system", "content": "extra setup"},
+            {"role": "user", "content": "hi"},
+        ],
+    }
+
+    AnthropicProvider._hoist_system_messages(body)
+
     assert [m["role"] for m in body["messages"]] == ["user"]
     assert body["system"] == [
         {"type": "text", "text": "main system"},
-        {"type": "text", "text": "<system-reminder>be concise</system-reminder>"},
+        {"type": "text", "text": "extra setup"},
     ]
 
 
@@ -67,21 +111,27 @@ def test_strip_synthetic_thinking_removes_only_synthetic_blocks() -> None:
     assert body["messages"][2]["content"][0]["type"] == "thinking"
 
 
-def test_strip_synthetic_thinking_keeps_message_non_empty() -> None:
+def test_strip_synthetic_thinking_drops_all_synthetic_message() -> None:
+    # A reasoning-only GLM/Kimi turn (e.g. max_tokens exhausted while thinking) leaves an
+    # assistant message that is ONLY a synthetic thinking block. It must be dropped
+    # entirely: an empty-text placeholder is rejected by Anthropic ("text content blocks
+    # must be non-empty"), and consecutive user turns are accepted.
     body = {
         "messages": [
+            {"role": "user", "content": "hi"},
             {
                 "role": "assistant",
                 "content": [
                     {"type": "thinking", "thinking": "x", "signature": SYNTHETIC_THINKING_SIGNATURE}
                 ],
-            }
+            },
+            {"role": "user", "content": "continue"},
         ]
     }
 
     AnthropicProvider._strip_synthetic_thinking(body)
 
-    assert body["messages"][0]["content"] == [{"type": "text", "text": ""}]
+    assert [m["role"] for m in body["messages"]] == ["user", "user"]
 
 
 def test_anthropic_sse_usage_parses_cache_tokens() -> None:
