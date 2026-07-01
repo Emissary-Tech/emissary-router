@@ -226,33 +226,6 @@ def _find_effort(body: dict[str, Any]) -> str | None:
     return walk(body)
 
 
-def clamp_max_tokens_for_model(body: dict[str, Any], model_name: str) -> None:
-    """Clamp max_tokens (and a now-oversized explicit thinking budget) to the served
-    model's output ceiling.
-
-    Claude Code sizes max_tokens for the model the USER configured — e.g. a
-    fable-configured client sends 128000 — which the served model may reject outright
-    ("max_tokens: 128000 > 64000 ... maximum allowed"). Models with no catalog ceiling
-    (OpenRouter-served) are left alone; the upstream clamps itself.
-    """
-    from emissary_router.catalog import CATALOG  # local import: avoid module cycle
-
-    spec = CATALOG.get(model_name)
-    limit = spec.max_output_tokens if spec else None
-    if not limit:
-        return
-    max_tokens = _int_or_none(body.get("max_tokens"))
-    if max_tokens is None or max_tokens <= limit:
-        return
-    body["max_tokens"] = limit
-    thinking = body.get("thinking")
-    if isinstance(thinking, dict):
-        budget = _int_or_none(thinking.get("budget_tokens"))
-        if budget is not None and budget >= limit:
-            # Anthropic requires budget_tokens < max_tokens.
-            thinking["budget_tokens"] = limit - 1
-
-
 def thinking_budget_from_max_tokens(body: dict[str, Any]) -> int:
     max_tokens = _int_or_none(body.get("max_tokens"))
     return max(max_tokens - 1, 1) if max_tokens else DEFAULT_MAX_THINKING_BUDGET

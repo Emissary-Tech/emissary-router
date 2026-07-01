@@ -12,28 +12,6 @@ from emissary_router.providers.thinking import (
 from emissary_router.schemas import AnthropicRequest, RequestContext
 
 
-def test_clamp_max_tokens_to_served_model_ceiling() -> None:
-    # A fable-configured Claude Code sends max_tokens=128000; haiku-4.5's ceiling is
-    # 64000 (live-verified 400 above it). Clamp must also shrink an explicit thinking
-    # budget so budget < max_tokens still holds.
-    from emissary_router.providers.thinking import clamp_max_tokens_for_model
-
-    body = {"max_tokens": 128000, "thinking": {"type": "enabled", "budget_tokens": 127999}}
-    clamp_max_tokens_for_model(body, "claude-haiku-4.5")
-    assert body["max_tokens"] == 64000
-    assert body["thinking"]["budget_tokens"] == 63999
-
-    # Under the ceiling: untouched.
-    body2 = {"max_tokens": 32000, "thinking": {"type": "enabled", "budget_tokens": 31999}}
-    clamp_max_tokens_for_model(body2, "claude-haiku-4.5")
-    assert body2["max_tokens"] == 32000 and body2["thinking"]["budget_tokens"] == 31999
-
-    # No catalog ceiling (OpenRouter-served models): untouched.
-    body3 = {"max_tokens": 128000}
-    clamp_max_tokens_for_model(body3, "glm-5.2")
-    assert body3["max_tokens"] == 128000
-
-
 def test_hoist_trailing_system_becomes_positioned_user_reminder() -> None:
     # Trailing role:system reminders must NOT be hoisted to the top-level system field:
     # system precedes messages in the prompt, so a changing reminder would rewrite the

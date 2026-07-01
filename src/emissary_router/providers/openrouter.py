@@ -16,7 +16,6 @@ from emissary_router.providers.thinking import (
     SYNTHETIC_THINKING_SIGNATURE,
     accepts_effort_for_model,
     can_disable_thinking_for_model,
-    clamp_max_tokens_for_model,
     extract_reasoning_settings,
     max_effort_for_model,
     normalize_effort,
@@ -464,15 +463,6 @@ class OpenRouterProvider:
         context: RequestContext | None = None,
         model_name: str | None = None,
     ) -> dict[str, Any]:
-        if model_name:
-            # Clamp max_tokens (and any explicit thinking budget) to the served model's
-            # output ceiling on a copy — the caller's body stays untouched. Matters for
-            # Claude models served via OpenRouter; OpenRouter-only models have no
-            # catalog ceiling and are clamped upstream.
-            body = {**body}
-            if isinstance(body.get("thinking"), dict):
-                body["thinking"] = dict(body["thinking"])
-            clamp_max_tokens_for_model(body, model_name)
         request: dict[str, Any] = {
             "model": model_id,
             "messages": cls._messages(body),

@@ -22,11 +22,6 @@ class ModelSpec:
     providers: dict[ProviderName, str]
     default_provider: ProviderName
     pricing: TokenPricing
-    # Hard output ceiling of the served model. Claude Code sizes max_tokens for the
-    # model the USER configured (e.g. fable sends 128000), which can exceed the model
-    # we actually serve — providers clamp to this. None = upstream clamps itself
-    # (OpenRouter does), so no local cap is needed.
-    max_output_tokens: int | None = None
 
 
 def cost_score(spec: ModelSpec) -> float:
@@ -95,8 +90,6 @@ CATALOG: dict[str, ModelSpec] = {
             cache_write_5m=1.25,
             cache_write_1h=2.00,
         ),
-        # Live-verified: native API rejects max_tokens > 64000 for claude-haiku-4-5.
-        max_output_tokens=64000,
     ),
     "claude-sonnet-4.6": ModelSpec(
         name="claude-sonnet-4.6",
@@ -112,8 +105,6 @@ CATALOG: dict[str, ModelSpec] = {
             cache_write_5m=3.75,
             cache_write_1h=6.00,
         ),
-        # Live-verified: native API accepts max_tokens=128000 for claude-sonnet-4-6.
-        max_output_tokens=128000,
     ),
 }
 

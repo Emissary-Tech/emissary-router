@@ -14,7 +14,6 @@ from emissary_router.schemas import AnthropicRequest, RequestContext
 from emissary_router.providers.base import ProviderComplete
 from emissary_router.providers.thinking import (
     SYNTHETIC_THINKING_SIGNATURE,
-    clamp_max_tokens_for_model,
     normalize_anthropic_thinking_for_model,
 )
 
@@ -89,9 +88,6 @@ class AnthropicProvider:
         self._strip_synthetic_thinking(body)
         if self._config.cache.strip_dynamic_attribution:
             self._strip_cch_attribution(body)
-        # Clamp BEFORE thinking normalization: adaptive->budget conversion derives the
-        # budget from max_tokens, so it must see the served model's real ceiling.
-        clamp_max_tokens_for_model(body, model.name)
         thinking_changes = normalize_anthropic_thinking_for_model(body, model.name)
         body["model"] = model.model_id
         headers = self._forward_headers(request.headers)
