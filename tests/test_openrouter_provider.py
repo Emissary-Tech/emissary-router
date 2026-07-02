@@ -589,3 +589,27 @@ def test_non_overflow_errors_pass_through_unchanged() -> None:
     }
 
     assert anthropic_error_payload(payload) is payload
+
+
+def test_xhigh_effort_maps_per_openrouter_model() -> None:
+    # Sonnet 5-era Claude Code body with the new xhigh effort level.
+    def body() -> dict:
+        return {
+            "max_tokens": 64000,
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "xhigh"},
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+
+    # glm / kimi support xhigh -> passes through unchanged.
+    assert OpenRouterProvider._reasoning(body(), "glm-5.2") == {"effort": "xhigh"}
+    assert OpenRouterProvider._reasoning(body(), "kimi-k2.7-code") == {"effort": "xhigh"}
+    # gemini flash-lite tops out at high -> clamped.
+    assert OpenRouterProvider._reasoning(body(), "gemini-3.1-flash-lite") == {"effort": "high"}
+
+    # Anthropic's "max" is not an OpenRouter wire value -> translated to xhigh
+    # where supported, clamped to high otherwise.
+    max_body = body()
+    max_body["output_config"]["effort"] = "max"
+    assert OpenRouterProvider._reasoning(max_body, "glm-5.2") == {"effort": "xhigh"}
+    assert OpenRouterProvider._reasoning(max_body, "gemini-3.1-flash-lite") == {"effort": "high"}
