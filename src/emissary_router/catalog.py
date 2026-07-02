@@ -22,6 +22,12 @@ class ModelSpec:
     providers: dict[ProviderName, str]
     default_provider: ProviderName
     pricing: TokenPricing
+    # Tokens the model can hold. Requests estimated above this are never routed here
+    # (context-fit guard); the provider would reject them with a context-overflow 400.
+    context_window: int = 200_000
+    # Window when the client sends the `context-1m` anthropic-beta header (native
+    # Anthropic only — the OpenRouter path does not forward that beta).
+    context_window_1m_beta: int | None = None
 
 
 def cost_score(spec: ModelSpec) -> float:
@@ -40,6 +46,7 @@ CATALOG: dict[str, ModelSpec] = {
         # Native Google Gemini 3 is unsafe for Claude Code tool loops; OpenRouter only.
         providers={"openrouter": "google/gemini-3.1-flash-lite"},
         default_provider="openrouter",
+        context_window=1_048_576,
         pricing=TokenPricing(
             input=0.25,
             output=1.50,
@@ -54,6 +61,7 @@ CATALOG: dict[str, ModelSpec] = {
         # cache_write == input price; only cache reads are discounted.
         providers={"openrouter": "z-ai/glm-5.2"},
         default_provider="openrouter",
+        context_window=1_048_576,
         pricing=TokenPricing(
             input=0.94,
             output=3.00,
@@ -68,6 +76,7 @@ CATALOG: dict[str, ModelSpec] = {
         # thinking cannot be disabled (see THINKING_CAPABILITIES).
         providers={"openrouter": "moonshotai/kimi-k2.7-code"},
         default_provider="openrouter",
+        context_window=262_144,
         pricing=TokenPricing(
             input=0.74,
             output=3.50,
@@ -83,6 +92,7 @@ CATALOG: dict[str, ModelSpec] = {
             "openrouter": "anthropic/claude-haiku-4.5",
         },
         default_provider="anthropic",
+        context_window=200_000,
         pricing=TokenPricing(
             input=1.00,
             output=5.00,
@@ -98,6 +108,8 @@ CATALOG: dict[str, ModelSpec] = {
             "openrouter": "anthropic/claude-sonnet-4.6",
         },
         default_provider="anthropic",
+        context_window=200_000,
+        context_window_1m_beta=1_000_000,
         pricing=TokenPricing(
             input=3.00,
             output=15.00,

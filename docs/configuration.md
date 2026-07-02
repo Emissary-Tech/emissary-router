@@ -157,10 +157,16 @@ also disables the [dashboard](dashboard.md).
 
 ## Routing
 
-Routing is confidence-gated and cache-aware by default:
+Routing is confidence-gated, cache-aware, and context-fit-guarded by default:
 
 1. Non-default models must clear `confidence` to be considered at all.
-2. The default plus every confident candidate are compared by **cache-adjusted
+2. Models whose **context window can't hold the request** are excluded outright — the
+   provider would reject them with a context-overflow 400. Request size is taken from
+   the router's own estimate and from the provider-reported cache size of the previous
+   turn (real tokenizer numbers), and Sonnet's `context-1m` beta is honored per
+   request. If the *default* can't hold the request, the cheapest model that fits
+   serves instead (`default_unsuitable:cheapest_alternative`).
+3. The default plus every confident candidate are compared by **cache-adjusted
    per-request cost**: a model that is still warm for the session is credited its
    observed cache reads (the cheap cache-read rate), while switching to a cold model is
    priced at full input plus a cache write. The cheapest wins; the default stays unless
@@ -169,8 +175,8 @@ Routing is confidence-gated and cache-aware by default:
 Cache awareness is not a mode. Wherever there is no cache signal — cold start, or a
 provider whose caching is opportunistic (see
 [providers and caching](providers-caching.md)) — the estimates simply carry no
-discount and the comparison reduces to plain price order, so routing is never worse
-than price-ordered. Switching models always starts cold on the new model, and that
+discount and the comparison is a flat per-request price comparison for the request's
+input/output shape. Switching models always starts cold on the new model, and that
 cost is exactly what the comparison accounts for.
 
 The cache ledger behind this lives in memory in the gateway process; it is not shared

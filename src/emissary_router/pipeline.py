@@ -29,6 +29,9 @@ from emissary_router.telemetry import (
 logger = logging.getLogger(__name__)
 
 SESSION_HEADER = "x-claude-code-session-id"
+# Substring of the anthropic-beta header value that raises Sonnet's native window to
+# 1M (e.g. "context-1m-2025-08-07"); Claude Code sends it on every request in 1M mode.
+CONTEXT_1M_BETA = "context-1m"
 
 
 class RouterPipeline:
@@ -104,6 +107,12 @@ class RouterPipeline:
             # them to always-on-reasoning models that can't honor that (and that reason
             # on a utility call, wasting cost/latency).
             skip = always_on_reasoning_models() if call_kind == "background" else frozenset()
+            # Context-fit guard: never route a request to a model whose window can't
+            # hold it — the provider would reject it with a context-overflow 400. With
+            # models excluded here, the normal price comparison deterministically picks
+            # the cheapest model that fits (this covers the original oversized turn,
+            # Claude Code's recovery retries, and the compact summarization call alike).
+            skip = skip | self._oversized_models(body, headers, cost_features)
             decision = choose_model(
                 self._config,
                 probabilities,
@@ -155,6 +164,49 @@ class RouterPipeline:
             context=context,
             on_complete=on_complete,
         )
+
+    def _oversized_models(
+        self,
+        body: dict,
+        headers: dict[str, str],
+        cost_features,
+    ) -> frozenset[str]:
+        """Enabled models whose context window cannot hold this request.
+
+        The size floor is the larger of our own estimate and the cache size a
+        provider actually reported for this session last turn (real tokenizer
+        numbers — catches chars/4 undercounting on CJK-heavy history). OpenRouter
+        validates input + max_tokens against the window (measured), so the requested
+        output is reserved there; native Anthropic validates input only (probed).
+        """
+        context_tokens = max(
+            cost_features.estimated_input_tokens,
+            self._cache_ledger.observed_context_tokens(cost_features),
+        )
+        try:
+            max_tokens = int(body.get("max_tokens") or 0)
+        except (TypeError, ValueError):
+            max_tokens = 0
+
+        oversized = set()
+        for model_name in self._config.enabled_models():
+            model = self._config.resolve_model(model_name)
+            spec = CATALOG[model_name]
+            window = spec.context_window
+            if (
+                spec.context_window_1m_beta
+                and model.provider == "anthropic"
+                and CONTEXT_1M_BETA in (_header(headers, "anthropic-beta") or "").lower()
+            ):
+                window = spec.context_window_1m_beta
+            reserve = max_tokens if model.provider == "openrouter" else 0
+            if context_tokens + reserve > window:
+                oversized.add(model_name)
+        if oversized:
+            logger.info(
+                "context-fit guard: ~%d tokens exceed %s", context_tokens, sorted(oversized)
+            )
+        return frozenset(oversized)
 
     def _default_decision(self, reason: str) -> RouteDecision:
         return RouteDecision(

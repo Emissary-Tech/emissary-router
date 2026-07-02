@@ -153,6 +153,28 @@ class CacheLedger:
                 if entry.expires_at > now
             }
 
+    def observed_context_tokens(self, features: RequestCostFeatures) -> int:
+        """Largest provider-reported cache size for this session+prefix, any model.
+
+        Providers count tokens with their own tokenizer; the chars/4 estimate can
+        undercount (CJK-heavy text ~2x). The last turn's observed cache covers about
+        the whole conversation, so it is a reliable real-number floor for the
+        context-fit guard — including for models this session has never used.
+        """
+        if not features.session_id:
+            return 0
+        now = time.time()
+        best = 0
+        for key, entry in self._entries.items():
+            if (
+                key.session_id == features.session_id
+                and key.prefix_hash == features.prefix_hash
+                and entry.expires_at > now
+                and entry.cached_tokens > best
+            ):
+                best = entry.cached_tokens
+        return best
+
     @staticmethod
     def _key(model: ResolvedModel, features: RequestCostFeatures) -> CacheLedgerKey | None:
         if not features.session_id:

@@ -526,3 +526,66 @@ def test_openrouter_strips_cch_attribution_from_system() -> None:
     f2 = extract_request_cost_features(body2, {})
     assert f1.prefix_hash == f2.prefix_hash
     assert OpenRouterProvider._messages(body2)[0]["content"] == msgs[0]["content"]
+
+
+# --- context-overflow error translation (Claude Code self-recovery depends on it) ---
+
+
+def test_overflow_error_translated_to_anthropic_shape() -> None:
+    from emissary_router.providers.openrouter import anthropic_error_payload
+
+    # Exact body OpenRouter returns when the request exceeds the endpoint's window
+    # (captured live; identical shape for kimi and anthropic models via OpenRouter).
+    payload = {
+        "error": {
+            "message": (
+                "This endpoint's maximum context length is 262144 tokens. However, "
+                "you requested about 297572 tokens (297508 of text input, 64 in the "
+                "output). Please reduce the length of either one, or use the "
+                "context-compression plugin to compress your prompt automatically."
+            ),
+            "code": 400,
+            "metadata": {"provider_name": None},
+        }
+    }
+
+    translated = anthropic_error_payload(payload)
+
+    # Claude Code only triggers its automatic context recovery (truncate old tool
+    # results + retry) on Anthropic's "prompt is too long" invalid_request_error.
+    assert translated["type"] == "error"
+    assert translated["error"]["type"] == "invalid_request_error"
+    assert translated["error"]["message"] == "prompt is too long: 297572 tokens > 262144 maximum"
+
+
+def test_overflow_translation_reads_anthropic_raw_in_metadata() -> None:
+    from emissary_router.providers.openrouter import anthropic_error_payload
+
+    payload = {
+        "error": {
+            "message": "Provider returned error",
+            "code": 400,
+            "metadata": {
+                "raw": '{"type":"error","error":{"type":"invalid_request_error",'
+                '"message":"prompt is too long: 228501 tokens > 200000 maximum"}}',
+                "provider_name": "Anthropic",
+            },
+        }
+    }
+
+    translated = anthropic_error_payload(payload)
+    assert translated["error"]["message"] == "prompt is too long: 228501 tokens > 200000 maximum"
+    assert translated["error"]["type"] == "invalid_request_error"
+
+
+def test_non_overflow_errors_pass_through_unchanged() -> None:
+    from emissary_router.providers.openrouter import anthropic_error_payload
+
+    payload = {
+        "error": {
+            "message": "Invalid schema for function 'Read': required is not of type array",
+            "code": 400,
+        }
+    }
+
+    assert anthropic_error_payload(payload) is payload
