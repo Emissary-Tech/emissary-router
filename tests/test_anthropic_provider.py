@@ -34,6 +34,31 @@ def test_hoist_trailing_system_becomes_positioned_user_reminder() -> None:
     assert reminder.count("<system-reminder") == 1  # already-wrapped content not re-wrapped
 
 
+def test_hoist_prompt_prefix_is_stable_across_turns_with_new_reminders() -> None:
+    # Cache-prefix regression guard: the top-level system must stay byte-identical and
+    # turn N's converted messages must be an exact prefix of turn N+1's, even when a
+    # NEW per-turn reminder appears. Anthropic hashes tools -> system -> messages, so
+    # any head change would invalidate every cache breakpoint in the conversation.
+    def body(messages):
+        return {"system": [{"type": "text", "text": "main system"}], "messages": list(messages)}
+
+    turn1_msgs = [
+        {"role": "user", "content": "fix the bug"},
+        {"role": "system", "content": "<system-reminder>R1</system-reminder>"},
+    ]
+    turn2_msgs = turn1_msgs + [
+        {"role": "assistant", "content": [{"type": "text", "text": "done"}]},
+        {"role": "user", "content": "now add tests"},
+        {"role": "system", "content": "<system-reminder>R2</system-reminder>"},
+    ]
+    b1, b2 = body(turn1_msgs), body(turn2_msgs)
+    AnthropicProvider._hoist_system_messages(b1)
+    AnthropicProvider._hoist_system_messages(b2)
+
+    assert b1["system"] == b2["system"] == [{"type": "text", "text": "main system"}]
+    assert b2["messages"][: len(b1["messages"])] == b1["messages"]
+
+
 def test_hoist_leading_system_message_moves_into_top_level_system() -> None:
     body = {
         "system": "main system",

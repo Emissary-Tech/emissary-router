@@ -324,6 +324,30 @@ def test_openrouter_trailing_system_becomes_positioned_user_reminder() -> None:
     assert msgs[2]["content"].count("<system-reminder") == 1  # no double-wrap
 
 
+def test_openrouter_prompt_prefix_is_stable_across_turns_with_new_reminders() -> None:
+    # Cache-prefix regression guard: turn N's converted messages must be an exact
+    # prefix of turn N+1's, even when a NEW per-turn reminder appears — otherwise the
+    # provider's prefix-matched prompt cache misses the whole conversation each turn.
+    turn1 = {
+        "system": "main system",
+        "messages": [
+            {"role": "user", "content": "fix the bug"},
+            {"role": "system", "content": "<system-reminder>R1</system-reminder>"},
+        ],
+    }
+    turn2 = {
+        "system": "main system",
+        "messages": turn1["messages"] + [
+            {"role": "assistant", "content": [{"type": "text", "text": "done"}]},
+            {"role": "user", "content": "now add tests"},
+            {"role": "system", "content": "<system-reminder>R2</system-reminder>"},
+        ],
+    }
+    m1 = OpenRouterProvider._messages(turn1)
+    m2 = OpenRouterProvider._messages(turn2)
+    assert m2[: len(m1)] == m1  # byte-identical prefix; new content only appended
+
+
 def test_openrouter_leading_system_message_folds_into_system() -> None:
     body = {
         "system": "main system",
@@ -385,6 +409,70 @@ def test_openrouter_stream_translation_reasoning_text_and_tools() -> None:
     delta_part = text.split('"type": "message_delta"', 1)[1]
     assert '"input_tokens": 12' in delta_part
     assert '"output_tokens": 7' in delta_part
+
+
+def _run_translation(chunks):
+    import asyncio
+    import json as _json
+
+    lines = ["data: " + _json.dumps(c) for c in chunks] + ["data: [DONE]"]
+
+    async def aiter():
+        for line in lines:
+            yield line
+
+    async def run():
+        sink: dict = {}
+        events = []
+        async for ev in OpenRouterProvider._iter_anthropic_events(aiter(), "m", sink):
+            events.append(_json.loads(ev.decode().split("data: ", 1)[1]))
+        return events, sink
+
+    return asyncio.run(run())
+
+
+def test_interleaved_parallel_tool_calls_keep_their_blocks() -> None:
+    # OpenAI deltas may interleave fragments of parallel tool calls (0/1/0/1);
+    # continuations carry no id/name. Each fragment must route to ITS block — never
+    # fabricate an "unknown_tool" block with split JSON.
+    events, _ = _run_translation([
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "id": "call_a", "function": {"name": "Read", "arguments": '{"p":'}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 1, "id": "call_b", "function": {"name": "Write", "arguments": '{"q":'}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "function": {"arguments": '1}'}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 1, "function": {"arguments": '2}'}}]}, "finish_reason": "tool_calls"}]},
+    ])
+
+    starts = {e["index"]: e["content_block"] for e in events if e["type"] == "content_block_start"}
+    names = [b["name"] for b in starts.values() if b["type"] == "tool_use"]
+    assert sorted(names) == ["Read", "Write"]  # exactly two tools, no unknown_tool
+    read_idx = next(i for i, b in starts.items() if b.get("name") == "Read")
+    write_idx = next(i for i, b in starts.items() if b.get("name") == "Write")
+    args = {read_idx: "", write_idx: ""}
+    for e in events:
+        if e["type"] == "content_block_delta" and e["delta"]["type"] == "input_json_delta":
+            args[e["index"]] += e["delta"]["partial_json"]
+    assert args[read_idx] == '{"p":1}'  # JSON intact per tool
+    assert args[write_idx] == '{"q":2}'
+
+
+def test_reasoning_between_tool_fragments_does_not_orphan_the_tool() -> None:
+    events, _ = _run_translation([
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "id": "call_a", "function": {"name": "Read", "arguments": '{"p":'}}]}}]},
+        {"choices": [{"delta": {"reasoning": "hmm"}}]},
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "function": {"arguments": '1}'}}]}, "finish_reason": "tool_calls"}]},
+    ])
+    tool_starts = [e for e in events if e["type"] == "content_block_start"
+                   and e["content_block"]["type"] == "tool_use"]
+    assert len(tool_starts) == 1 and tool_starts[0]["content_block"]["name"] == "Read"
+    joined = "".join(e["delta"]["partial_json"] for e in events
+                     if e["type"] == "content_block_delta" and e["delta"]["type"] == "input_json_delta")
+    assert joined == '{"p":1}'
 
 
 def test_openrouter_stream_records_usage_before_trailing_events() -> None:

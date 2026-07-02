@@ -242,16 +242,23 @@ class OpenRouterProvider:
         """
         sse = cls._sse
         next_index = 0
-        cur: tuple[str, int, int | None] | None = None  # (kind, index, oai_tool_index)
+        # Active thinking/text block (they alternate); tool blocks are tracked
+        # separately per OpenAI tool index and stay open until stream end, so
+        # interleaved argument fragments (0/1/0) or reasoning arriving between two
+        # fragments of one call can never orphan a tool and fabricate an
+        # "unknown_tool" block with split JSON.
+        cur_stream: tuple[str, int] | None = None  # (kind: thinking|text, index)
+        open_tools: dict[int, int] = {}  # OpenAI tool index -> Anthropic block index
         finish_reason: str | None = None
         final_usage: dict[str, Any] = {}
 
-        def close_cur() -> list[bytes]:
-            nonlocal cur
-            if cur is None:
+        def close_stream_block() -> list[bytes]:
+            nonlocal cur_stream
+            if cur_stream is None:
                 return []
+            kind, index = cur_stream
             out: list[bytes] = []
-            if cur[0] == "thinking":
+            if kind == "thinking":
                 # Close the thinking block with a signature so the client treats it like a
                 # native thinking block. It's a synthetic marker, not a real Anthropic
                 # signature; the Anthropic provider strips these from later turns.
@@ -260,7 +267,7 @@ class OpenRouterProvider:
                         "content_block_delta",
                         {
                             "type": "content_block_delta",
-                            "index": cur[1],
+                            "index": index,
                             "delta": {
                                 "type": "signature_delta",
                                 "signature": SYNTHETIC_THINKING_SIGNATURE,
@@ -268,51 +275,29 @@ class OpenRouterProvider:
                         },
                     )
                 )
-            out.append(sse("content_block_stop", {"type": "content_block_stop", "index": cur[1]}))
-            cur = None
+            out.append(sse("content_block_stop", {"type": "content_block_stop", "index": index}))
+            cur_stream = None
             return out
 
-        def open_thinking() -> list[bytes]:
-            nonlocal next_index, cur
-            if cur is not None and cur[0] == "thinking":
+        def open_stream_block(kind: str) -> list[bytes]:
+            nonlocal next_index, cur_stream
+            if cur_stream is not None and cur_stream[0] == kind:
                 return []
-            out = close_cur()
+            out = close_stream_block()
+            block = {"type": "thinking", "thinking": ""} if kind == "thinking" else {"type": "text", "text": ""}
             out.append(
                 sse(
                     "content_block_start",
-                    {
-                        "type": "content_block_start",
-                        "index": next_index,
-                        "content_block": {"type": "thinking", "thinking": ""},
-                    },
+                    {"type": "content_block_start", "index": next_index, "content_block": block},
                 )
             )
-            cur = ("thinking", next_index, None)
-            next_index += 1
-            return out
-
-        def open_text() -> list[bytes]:
-            nonlocal next_index, cur
-            if cur is not None and cur[0] == "text":
-                return []
-            out = close_cur()
-            out.append(
-                sse(
-                    "content_block_start",
-                    {
-                        "type": "content_block_start",
-                        "index": next_index,
-                        "content_block": {"type": "text", "text": ""},
-                    },
-                )
-            )
-            cur = ("text", next_index, None)
+            cur_stream = (kind, next_index)
             next_index += 1
             return out
 
         def open_tool(oai_idx: int, tool_id: str | None, name: str | None) -> list[bytes]:
-            nonlocal next_index, cur
-            out = close_cur()
+            nonlocal next_index
+            out = close_stream_block()
             out.append(
                 sse(
                     "content_block_start",
@@ -328,7 +313,7 @@ class OpenRouterProvider:
                     },
                 )
             )
-            cur = ("tool", next_index, oai_idx)
+            open_tools[oai_idx] = next_index
             next_index += 1
             return out
 
@@ -380,26 +365,26 @@ class OpenRouterProvider:
 
             reasoning = _reasoning_text(delta)
             if reasoning:
-                for event in open_thinking():
+                for event in open_stream_block("thinking"):
                     yield event
                 yield sse(
                     "content_block_delta",
                     {
                         "type": "content_block_delta",
-                        "index": cur[1],
+                        "index": cur_stream[1],
                         "delta": {"type": "thinking_delta", "thinking": reasoning},
                     },
                 )
 
             content = delta.get("content")
             if content:
-                for event in open_text():
+                for event in open_stream_block("text"):
                     yield event
                 yield sse(
                     "content_block_delta",
                     {
                         "type": "content_block_delta",
-                        "index": cur[1],
+                        "index": cur_stream[1],
                         "delta": {"type": "text_delta", "text": content},
                     },
                 )
@@ -407,7 +392,7 @@ class OpenRouterProvider:
             for tool_call in delta.get("tool_calls") or []:
                 oai_idx = tool_call.get("index", 0)
                 fn = tool_call.get("function") or {}
-                if cur is None or cur[0] != "tool" or cur[2] != oai_idx:
+                if oai_idx not in open_tools:
                     for event in open_tool(oai_idx, tool_call.get("id"), fn.get("name")):
                         yield event
                 args = fn.get("arguments")
@@ -416,13 +401,15 @@ class OpenRouterProvider:
                         "content_block_delta",
                         {
                             "type": "content_block_delta",
-                            "index": cur[1],
+                            "index": open_tools[oai_idx],
                             "delta": {"type": "input_json_delta", "partial_json": args},
                         },
                     )
 
-        for event in close_cur():
+        for event in close_stream_block():
             yield event
+        for index in sorted(open_tools.values()):
+            yield sse("content_block_stop", {"type": "content_block_stop", "index": index})
         # Cumulative usage in the final message_delta (the protocol-sanctioned backfill
         # point): OpenAI-format usage only arrives at stream end, so message_start had
         # to carry zeros — without this the client would never see input/cache tokens
