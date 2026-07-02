@@ -30,6 +30,13 @@ def choose_model(
     `skip_models` are never deviated to (e.g. always-on-reasoning models on a
     background call); if the default itself is skipped, the cheapest usable model
     serves instead.
+
+    Context limits are deliberately NOT a routing concern: a request that exceeds the
+    served model's window comes back as a provider 400, which the OpenRouter path
+    normalizes to Anthropic's "prompt is too long" shape so the client's own context
+    management (Claude Code: truncate old tool results, retry; worst case /compact)
+    takes over. The conversation belongs to the client — the router does not silently
+    reroute it based on its own size estimates.
     """
     if cost_features is not None and cache_ledger is not None:
         return _cache_aware(config, probabilities, skip_models, cost_features, cache_ledger)

@@ -42,29 +42,26 @@ through. With the default 200K budget this is safe with the catalog above: every
 routable model has a 200K+ window, so Claude Code compacts before any of them can
 overflow.
 
-⚠️ The case that needs care is **1M mode** (`context-1m` beta on Sonnet). Claude Code
+⚠️ The case to know about is **1M mode** (`context-1m` beta on Sonnet). Claude Code
 then lets the conversation grow far past 200K — beyond what `claude-haiku-4.5` (200K)
-or `kimi-k2.7-code` (256K) can hold. The router handles this deterministically with a
-**context-fit guard**: models whose window can't hold the request are excluded from
-routing, and the normal price comparison picks the cheapest enabled model that fits.
-Request size is taken from the router's own estimate *and* the provider-reported
-cache size of the previous turn (real tokenizer numbers), the requested output is
-reserved on the OpenRouter side (which validates input + output against the window —
-measured), and Sonnet's 1M beta is honored per request. Oversized turns, retries, and
-the compact summarization call all take the same path — nothing depends on routing
-luck.
+or `kimi-k2.7-code` (256K) can hold. The router deliberately does **not** reroute
+around this: the conversation belongs to the client, and shrinking it is the
+client's decision, not something the router should do silently from its own size
+estimates. A request routed to a model that can't hold it comes back as that
+provider's 400 (visible as a 400 row in the dashboard), normalized so the client's
+own context management takes over.
 
-A provider overflow 400 therefore only remains possible when **no enabled model fits**
-(e.g. only sub-1M models enabled in a 1M-mode session). What that looks like for the
-user (verified against a real Claude Code 2.1.198 session with an injected overflow
-400):
+What that looks like for the user (verified against a real Claude Code 2.1.198
+session with an injected overflow 400):
 
 - **Usually invisible.** Claude Code handles the 400 on its own: it truncates old
   tool results (microcompact), re-reads files it still needs, and retries — the turn
-  completed a few seconds later with no banner and no lost input.
+  completed a few seconds later with no banner and no lost input. The retry enters
+  routing as a normal request.
 - **Worst case** (recovery attempts keep failing): Claude Code stops with
   `Context limit reached · /compact or /clear to continue`. Running `/compact`
   summarizes and the session continues; the message you had queued is preserved.
+  After any compact the conversation is small again and every model is back in play.
 
 This self-recovery only triggers on Anthropic's `prompt is too long` error shape.
 OpenRouter reports the same condition in an OpenAI shape ("This endpoint's maximum
@@ -73,6 +70,10 @@ abandons the turn (verified live). The router therefore normalizes OpenRouter
 context-overflow 400s into the Anthropic shape before returning them, so the
 recovery works the same no matter which provider or model served the request; the
 original OpenRouter error is still logged.
+
+If you run 1M mode routinely, expect occasional overflow 400 rows for the sub-1M
+models (`claude-haiku-4.5` / `kimi-k2.7-code`) as Claude Code trims and retries — or
+disable those models for such sessions.
 
 ## Caching
 
