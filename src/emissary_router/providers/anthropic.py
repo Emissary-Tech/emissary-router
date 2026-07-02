@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from copy import deepcopy
 
 import httpx
@@ -12,13 +11,11 @@ from emissary_router.caching.usage import Usage
 from emissary_router.config import ProviderConfig, ResolvedModel
 from emissary_router.schemas import AnthropicRequest, RequestContext
 from emissary_router.providers.base import ProviderComplete
-from emissary_router.providers.base import sanitize_tool_id
+from emissary_router.providers.base import CCH_ATTRIBUTION_LINE_RE, sanitize_tool_id
 from emissary_router.providers.thinking import (
     SYNTHETIC_THINKING_SIGNATURE,
     normalize_anthropic_thinking_for_model,
 )
-
-CCH_ATTRIBUTION_LINE_RE = re.compile(r"(?m)^.*\bcch=[^\s<>\"]+.*(?:\n|$)")
 
 logger = logging.getLogger(__name__)
 
@@ -107,8 +104,11 @@ class AnthropicProvider:
         # Drop thinking blocks we synthesized from another provider's reasoning on a
         # prior turn — their signature is not valid to Anthropic and would 400.
         self._strip_synthetic_thinking(body)
-        if self._config.cache.strip_dynamic_attribution:
-            self._strip_cch_attribution(body)
+        # Strip the legacy dynamic cch= attribution line unconditionally, on every
+        # provider path: current Claude Code no longer sends it (verified against live
+        # 2.1.198 traffic), and for older clients that do, leaving it in would bust the
+        # provider prompt cache and diverge from the ledger's stripped prefix_hash.
+        self._strip_cch_attribution(body)
         thinking_changes = normalize_anthropic_thinking_for_model(body, model.name)
         body["model"] = model.model_id
         headers = self._forward_headers(request.headers)

@@ -95,6 +95,13 @@ class CacheLedger:
         if key is None:
             return
 
+        if usage.total_input_tokens == 0 and usage.output_tokens == 0:
+            # No evidence at all — provider error paths and severed streams report an
+            # all-zero Usage(). A transient 429/500 must not wipe a warm entry (the
+            # provider-side cache still exists); a REAL "cache gone" observation is a
+            # successful response, which always carries input/output tokens.
+            return
+
         observed_tokens = max(
             usage.cache_read_input_tokens,
             usage.cache_creation_input_tokens,

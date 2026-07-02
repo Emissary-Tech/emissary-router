@@ -3,15 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 import hashlib
 import json
-import re
 from typing import Any
 
 from emissary_router.catalog import CATALOG, TokenPricing
+from emissary_router.providers.base import CCH_ATTRIBUTION_LINE_RE
 from emissary_router.config import AppConfig
 
 
 DEFAULT_EXPECTED_OUTPUT_TOKENS = 1024
-CCH_ATTRIBUTION_LINE_RE = re.compile(r"(?m)^.*\bcch=[^\s<>\"]+.*(?:\n|$)")
 
 
 @dataclass(frozen=True)

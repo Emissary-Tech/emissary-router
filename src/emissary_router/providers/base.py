@@ -18,6 +18,17 @@ ProviderComplete = Callable[[Usage, dict[str, Any]], None]
 # routes to a native Anthropic model.
 TOOL_ID_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
+# Claude Code appends a dynamic `cch=` attribution line to the system prompt. It
+# changes between requests, so anywhere it survives into a provider request it busts
+# that provider's prefix-matched prompt cache — and the ledger's prefix_hash is
+# computed WITHOUT it, so senders must strip it too or predictions and reality drift.
+# Single definition: the hash (routing/cache_cost) and every provider strip with this.
+CCH_ATTRIBUTION_LINE_RE = re.compile(r"(?m)^.*\bcch=[^\s<>\"]+.*(?:\n|$)")
+
+
+def strip_cch_text(text: str) -> str:
+    return CCH_ATTRIBUTION_LINE_RE.sub("", text)
+
 
 def sanitize_tool_id(tool_id: str | None) -> str | None:
     """Map a tool id to an Anthropic-valid one, deterministically.

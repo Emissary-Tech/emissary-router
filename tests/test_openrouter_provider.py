@@ -503,3 +503,26 @@ def test_openrouter_stream_records_usage_before_trailing_events() -> None:
 
     sink = asyncio.run(run())
     assert sink["usage"]["prompt_tokens"] == 40  # recorded the moment it arrived
+
+
+def test_openrouter_strips_cch_attribution_from_system() -> None:
+    # The dynamic cch= line changes per request; left in, it busts the provider's
+    # prefix cache AND diverges from the ledger's prefix_hash (which is computed on the
+    # stripped system). The OpenRouter path must strip it like the Anthropic path does.
+    from emissary_router.routing.cache_cost import extract_request_cost_features
+
+    body = {
+        "system": "stable prefix\nClaude Code attribution cch=abc123\nmore prefix",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    msgs = OpenRouterProvider._messages(body)
+    assert "cch=" not in msgs[0]["content"]
+    assert "stable prefix" in msgs[0]["content"] and "more prefix" in msgs[0]["content"]
+
+    # hash/sender consistency: two requests differing only in the cch value produce the
+    # SAME prefix_hash and the SAME outbound system text
+    body2 = {**body, "system": body["system"].replace("cch=abc123", "cch=zzz999")}
+    f1 = extract_request_cost_features(body, {})
+    f2 = extract_request_cost_features(body2, {})
+    assert f1.prefix_hash == f2.prefix_hash
+    assert OpenRouterProvider._messages(body2)[0]["content"] == msgs[0]["content"]

@@ -148,6 +148,8 @@ class ServerConfig(BaseModel):
 class CacheConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    # Deprecated no-op: the cch= line is now stripped unconditionally on every
+    # provider (current Claude Code no longer sends it at all).
     strip_dynamic_attribution: bool = True
 
 

@@ -11,7 +11,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from emissary_router.caching.usage import Usage
 from emissary_router.config import ProviderConfig, ResolvedModel
 from emissary_router.schemas import AnthropicRequest, RequestContext
-from emissary_router.providers.base import ProviderComplete, sanitize_tool_id
+from emissary_router.providers.base import ProviderComplete, sanitize_tool_id, strip_cch_text
 from emissary_router.providers.thinking import (
     SYNTHETIC_THINKING_SIGNATURE,
     accepts_effort_for_model,
@@ -540,7 +540,7 @@ class OpenRouterProvider:
         messages: list[dict[str, Any]] = []
         body_messages: list[dict[str, Any]] = []
         system_parts: list[str] = []
-        top_system = cls._stringify(body.get("system"))
+        top_system = strip_cch_text(cls._stringify(body.get("system")))
         if top_system:
             system_parts.append(top_system)
 
@@ -548,7 +548,7 @@ class OpenRouterProvider:
         for message in body.get("messages", []) or []:
             role = message.get("role")
             if role == "system":
-                inline = cls._stringify(message.get("content"))
+                inline = strip_cch_text(cls._stringify(message.get("content")))
                 if not inline:
                     continue
                 if leading:

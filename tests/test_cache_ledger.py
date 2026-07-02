@@ -151,6 +151,8 @@ def test_no_session_does_not_cross_pollinate_cache_state() -> None:
 
 
 def test_zero_cache_observation_clears_previous_prediction() -> None:
+    # REAL evidence of a gone cache: a successful response (input/output tokens
+    # present) that reports zero cache tokens.
     config = _config()
     model = config.resolve_model("claude-sonnet-4.6")
     ledger = CacheLedger()
@@ -159,8 +161,25 @@ def test_zero_cache_observation_clears_previous_prediction() -> None:
     ledger.observe(model, features, Usage(cache_creation_input_tokens=10000))
     assert ledger.predict(model, features).warm is True
 
-    ledger.observe(model, features, Usage())
+    ledger.observe(model, features, Usage(input_tokens=12000, output_tokens=50))
 
     prediction = ledger.predict(model, features)
     assert prediction.warm is False
     assert prediction.reason == "cold"
+
+
+def test_error_shaped_all_zero_usage_does_not_wipe_warm_entry() -> None:
+    # Provider error paths (429/500, severed streams) report an all-zero Usage().
+    # That is NO evidence about the provider-side cache — a transient error must not
+    # wipe warm state and trigger a pointless model switch on the next turn.
+    config = _config()
+    model = config.resolve_model("claude-sonnet-4.6")
+    ledger = CacheLedger()
+    features = _features()
+
+    ledger.observe(model, features, Usage(cache_creation_input_tokens=10000))
+    assert ledger.predict(model, features).warm is True
+
+    ledger.observe(model, features, Usage())  # all-zero: error shape
+
+    assert ledger.predict(model, features).warm is True  # still warm

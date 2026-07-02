@@ -40,9 +40,9 @@ There is no generic cache switch — caching works differently per provider, and
 router preserves each provider's native mechanism rather than managing caches itself.
 
 - Anthropic: Claude Code's `cache_control` blocks pass through unchanged. The router
-  removes the dynamic `cch=` attribution line by default
-  (`strip_dynamic_attribution`) so the prompt prefix stays byte-stable and the
-  provider's prefix cache keeps hitting.
+  strips the legacy dynamic `cch=` attribution line on every provider path so the
+  prompt prefix stays byte-stable (current Claude Code no longer sends it; the strip
+  protects sessions from older clients).
 - OpenRouter: Claude models use OpenRouter/Anthropic cache accounting where
   available; Gemini, GLM, and Kimi use implicit (automatic) caching.
 - Native Google: explicit `CachedContent` lifecycle management is out of scope in V1.
