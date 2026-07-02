@@ -21,11 +21,12 @@ This is the full shipped config. Everything not shown uses defaults.
   "models": {
     "claude-sonnet-4.6": { "enabled": true, "provider": "anthropic" },
     "claude-haiku-4.5": { "enabled": true, "provider": "anthropic" },
-    "gemini-3.1-flash-lite": { "enabled": true, "provider": "openrouter" }
+    "gemini-3.1-flash-lite": { "enabled": true, "provider": "openrouter" },
+    "glm-5.2": { "enabled": true, "provider": "openrouter" },
+    "kimi-k2.7-code": { "enabled": true, "provider": "openrouter" }
   },
   "default": "claude-sonnet-4.6",
   "confidence": 0.8,
-  "policy": "deviate_if_confident",
   "router": { "router_model": "emissary-model-router-shared" },
   "server": { "port": 8788 },
   "telemetry": { "enabled": true, "retention_days": 30, "max_events": 50000 }
@@ -60,8 +61,10 @@ providers, and its `cost_score`. Routing scans enabled models cheapest-first, wh
 reordering the catalog can't change routing. Cheapest → most expensive today:
 
 1. `gemini-3.1-flash-lite`
-2. `claude-haiku-4.5`
-3. `claude-sonnet-4.6`
+2. `glm-5.2`
+3. `kimi-k2.7-code`
+4. `claude-haiku-4.5`
+5. `claude-sonnet-4.6`
 
 #### Choosing a provider
 
@@ -74,6 +77,8 @@ only how the request is delivered changes.
 | `claude-sonnet-4.6`     | `anthropic`, `openrouter`     |
 | `claude-haiku-4.5`      | `anthropic`, `openrouter`     |
 | `gemini-3.1-flash-lite` | `openrouter`                  |
+| `glm-5.2`               | `openrouter`                  |
+| `kimi-k2.7-code`        | `openrouter`                  |
 
 Common reasons to override: you only hold one provider's key, or you want to
 consolidate billing. For example, if you only have an OpenRouter key, route the Claude
@@ -91,7 +96,14 @@ Only the keys for the providers you actually resolve to are required — the exa
 above needs only `OPENROUTER_API_KEY`. Picking a provider a model does not support
 (e.g. Gemini on `anthropic`) fails validation. Gemini is OpenRouter-only in V1 because
 native Google Gemini 3 is unsafe for Claude Code tool loops (see
-[providers and caching](providers-caching.md)).
+[providers and caching](providers-caching.md)). `glm-5.2` and `kimi-k2.7-code` are
+OpenRouter-only as well; `kimi-k2.7-code` always reasons (its thinking can't be
+disabled), so it keeps reasoning even on background calls.
+
+> Routing to a model requires the configured `router.router_model` to be trained on it.
+> The default shared router must recognize `glm-5.2` / `kimi-k2.7-code` for them to be
+> routable — otherwise enabling them makes the classifier return a label mismatch. See
+> [`router`](#router).
 
 ### `default` (required)
 
@@ -106,22 +118,10 @@ Float in `[0, 1]`, default `0.8`. Non-default models must meet this classifier
 probability before the router is allowed to consider them. Higher `confidence` = more
 conservative (stays on `default` more often). See [routing](#routing).
 
-### `policy`
+### `policy` (deprecated)
 
-The routing policy. Supported values:
-
-- `deviate_if_confident` (default) — scan enabled models cheap → expensive and pick
-  the first whose probability is `>= confidence`; otherwise use `default`.
-- `cache_aware` — apply the same confidence gate, then compare each candidate's
-  estimated cost *after* prompt-cache effects, and deviate only when switching is
-  cheaper once the cost of losing a warm cache is counted.
-
-Consider `cache_aware` for long Claude Code sessions. Switching the served model
-discards the provider's prompt cache, so naive per-request routing can re-pay full
-input on every turn and end up costing *more* than never deviating at all.
-`cache_aware` prices that in and stays on a warm model unless a cheaper one clearly
-wins. It is opt-in because it depends on an in-process cache ledger — see the caveat
-under [Routing](#routing).
+Older configs may contain a `policy` field; it is accepted and ignored. Routing is
+cache-aware by default — see [Routing](#routing) — so there is no policy to choose.
 
 ### `router`
 
@@ -157,25 +157,27 @@ also disables the [dashboard](dashboard.md).
 
 ## Routing
 
-The default policy is `deviate_if_confident`: scan enabled models cheap → expensive,
-and use the first model whose classifier probability is `>= confidence`. If none
-qualify, use `default`.
+Routing is confidence-gated and cache-aware by default:
 
-`cache_aware` is opt-in. It uses the same confidence gate, then compares estimated
-cost after prompt-cache read/write effects:
+1. Non-default models must clear `confidence` to be considered at all.
+2. The default plus every confident candidate are compared by **cache-adjusted
+   per-request cost**: a model that is still warm for the session is credited its
+   observed cache reads (the cheap cache-read rate), while switching to a cold model is
+   priced at full input plus a cache write. The cheapest wins; the default stays unless
+   a candidate is strictly cheaper *after* cache effects.
 
-- No non-default model meets `confidence` → `default`.
-- A cheaper model meets `confidence`, but switching would lose an expensive warm cache
-  → `default`.
-- A cheaper model meets `confidence` and wins after cache-adjusted cost → that model.
+Cache awareness is not a mode. Wherever there is no cache signal — cold start, or a
+provider whose caching is opportunistic (see
+[providers and caching](providers-caching.md)) — the estimates simply carry no
+discount and the comparison reduces to plain price order, so routing is never worse
+than price-ordered. Switching models always starts cold on the new model, and that
+cost is exactly what the comparison accounts for.
 
-The cache ledger backing `cache_aware` lives in memory in the gateway process; it is
-not shared or persisted, and resets on restart. The default `er start` / `er code`
-launch runs a single process, which is what `cache_aware` expects — running multiple
-workers would give each its own ledger and weaken cache awareness. Anthropic cache
-behavior is tracked directly (`predictable`); OpenRouter/Gemini caching is implicit, so
-the router treats it as best-effort and only credits it after observing a real cache
-read (see [providers and caching](providers-caching.md)).
+The cache ledger behind this lives in memory in the gateway process; it is not shared
+or persisted, and resets on restart (it re-warms within a turn). The default
+`er start` / `er code` launch runs a single process, which is what the ledger expects.
+Anthropic cache behavior is tracked directly (`predictable`); OpenRouter implicit
+caching is credited only after an observed cache read (`best_effort`).
 
 ## API keys
 

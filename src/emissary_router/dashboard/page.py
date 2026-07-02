@@ -207,9 +207,6 @@ async function renderSettings() {
         <div class="set-row"><select id="default-select"></select></div>
         <div class="label" style="margin-top:14px">Confidence — deviate to a cheaper model when p ≥ this</div>
         <div class="set-row"><input type="number" id="confidence" min="0" max="1" step="0.05" value="${cfg.confidence}"></div>
-        <div class="label" style="margin-top:14px">Routing policy</div>
-        <div class="set-row"><select id="policy-select"></select></div>
-        <div class="note" id="policy-note"></div>
       </div>
     </div>
     <button class="primary" id="save-config">Save</button>
@@ -224,16 +221,6 @@ async function renderSettings() {
   };
   document.querySelectorAll("#settings [data-model]").forEach(c => c.onchange = rebuildDefault);
   rebuildDefault();
-  const POLICY_HELP = {
-    deviate_if_confident: "Pick the cheapest model the classifier is confident about.",
-    cache_aware: "Account for the prompt cache; avoid switching in a way that busts it. Best for long sessions.",
-  };
-  const policySelect = $("policy-select");
-  policySelect.innerHTML = (cfg.policies || [cfg.policy]).map(p =>
-    `<option value="${esc(p)}" ${p === cfg.policy ? "selected" : ""}>${esc(p)}</option>`).join("");
-  const updatePolicyNote = () => { $("policy-note").textContent = POLICY_HELP[policySelect.value] || ""; };
-  policySelect.onchange = updatePolicyNote;
-  updatePolicyNote();
   $("save-config").onclick = async () => {
     const models = {};
     document.querySelectorAll("#settings [data-model]").forEach(c => {
@@ -242,7 +229,7 @@ async function renderSettings() {
     });
     const headers = { "content-type": "application/json" };
     if (KEY) headers["x-api-key"] = KEY;
-    const body = JSON.stringify({ models, default: $("default-select").value, confidence: parseFloat($("confidence").value), policy: $("policy-select").value });
+    const body = JSON.stringify({ models, default: $("default-select").value, confidence: parseFloat($("confidence").value) });
     const r = await fetch("/api/config", { method: "PUT", headers, body });
     const j = await r.json().catch(() => ({}));
     const msg = $("save-msg");

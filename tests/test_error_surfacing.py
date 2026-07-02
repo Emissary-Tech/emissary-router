@@ -66,7 +66,6 @@ def _config_with_haiku():
                 "gemini-3.1-flash-lite": False,
             },
             "default": "claude-sonnet-4.6",
-            "policy": "cache_aware",
         }
     )
 
@@ -115,7 +114,7 @@ def test_missing_labels_still_502_and_recorded(tmp_path):
     assert rows[0]["http_status"] == 502
 
 
-def test_pipeline_passes_cache_state_to_cache_aware_policy(tmp_path):
+def test_pipeline_passes_cache_state_to_routing(tmp_path):
     store = SqliteStore(tmp_path / "e.sqlite3")
     config = _config_with_haiku()
     pipe = RouterPipeline(config, store=store)

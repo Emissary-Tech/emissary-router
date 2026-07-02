@@ -12,21 +12,39 @@ from emissary_router.schemas import RouteDecision
 def choose_model(
     config: AppConfig,
     probabilities: dict[str, float],
+    skip_models: frozenset[str] | set[str] = frozenset(),
     cost_features: RequestCostFeatures | None = None,
     cache_ledger=None,
 ) -> RouteDecision:
-    if config.policy == "deviate_if_confident":
-        return _deviate_if_confident(config, probabilities)
-    if config.policy == "cache_aware":
-        if cost_features is None or cache_ledger is None:
-            return _deviate_if_confident(config, probabilities)
-        return _cache_aware(config, probabilities, cost_features, cache_ledger)
-    raise ValueError(f"unknown policy: {config.policy}")
+    """Confidence-gated, cache-aware routing.
+
+    Cache awareness is not a mode: whenever the request's cost features and the cache
+    ledger are available (every gateway request), candidates are compared by
+    cache-adjusted per-request cost — a warm model is credited its observed cache
+    reads, switching is priced at full input plus a cache write. Where there is no
+    cache signal (cold start, providers without usable cache reporting) the estimates
+    carry no discount and the comparison reduces to plain price order, so routing is
+    never worse than price-ordered.
+
+    `skip_models` are never deviated to (e.g. always-on-reasoning models on a
+    background call); if the default itself is skipped, the cheapest usable model
+    serves instead.
+    """
+    if cost_features is not None and cache_ledger is not None:
+        return _cache_aware(config, probabilities, skip_models, cost_features, cache_ledger)
+    return _price_ordered(config, probabilities, skip_models)
 
 
-def _deviate_if_confident(config: AppConfig, probabilities: dict[str, float]) -> RouteDecision:
-    """Default to the configured model, deviating only when confidence is high."""
+def _price_ordered(
+    config: AppConfig,
+    probabilities: dict[str, float],
+    skip_models: frozenset[str] | set[str] = frozenset(),
+) -> RouteDecision:
+    """Fallback when no cost features/ledger are available: scan cheap -> expensive and
+    pick the first confident model; otherwise the default."""
     for model_name in config.enabled_models():
+        if model_name in skip_models:
+            continue
         if probabilities.get(model_name, 0.0) >= config.confidence:
             reason = (
                 "default"
@@ -39,6 +57,18 @@ def _deviate_if_confident(config: AppConfig, probabilities: dict[str, float]) ->
                 probabilities=probabilities,
             )
 
+    if config.default in skip_models:
+        # A user may legitimately set an always-on-reasoning model as default;
+        # background calls fall back to the cheapest usable model instead of burning
+        # reasoning tokens on every title/summary call.
+        for model_name in config.enabled_models():  # cheap -> expensive
+            if model_name not in skip_models:
+                return RouteDecision(
+                    model_name=model_name,
+                    reason="default_unsuitable:cheapest_alternative",
+                    probabilities=probabilities,
+                )
+
     return RouteDecision(
         model_name=config.default,
         reason="default",
@@ -49,45 +79,55 @@ def _deviate_if_confident(config: AppConfig, probabilities: dict[str, float]) ->
 def _cache_aware(
     config: AppConfig,
     probabilities: dict[str, float],
+    skip_models: frozenset[str] | set[str],
     cost_features: RequestCostFeatures,
     cache_ledger,
 ) -> RouteDecision:
-    eligible = [config.default]
+    candidates: list[str] = []
+    if config.default not in skip_models:
+        candidates.append(config.default)
     for model_name in config.enabled_models():
-        if model_name == config.default:
+        if model_name == config.default or model_name in skip_models:
             continue
         if probabilities.get(model_name, 0.0) >= config.confidence:
-            eligible.append(model_name)
+            candidates.append(model_name)
+
+    if not candidates:
+        # Everything usable is skipped or nothing qualifies; the price path carries the
+        # default / default-unsuitable fallbacks.
+        return _price_ordered(config, probabilities, skip_models)
 
     estimates = {
         model_name: estimate_cost(config, model_name, cost_features, cache_ledger)
-        for model_name in eligible
+        for model_name in candidates
     }
-    baseline = estimates[config.default]
-    best = min(estimates.values(), key=lambda estimate: estimate.total_usd)
     estimated_costs = {name: cost.to_dict() for name, cost in estimates.items()}
+    best = min(estimates.values(), key=lambda estimate: estimate.total_usd)
+    default_estimate = estimates.get(config.default)
 
-    if best.model_name != config.default and is_cheaper(best, baseline):
+    if default_estimate is not None and (
+        best.model_name == config.default or not is_cheaper(best, default_estimate)
+    ):
+        # Stayed on default. Distinguish *why* so the cause is visible in telemetry:
+        #   no_confident_candidate — no non-default model cleared `confidence`
+        #   warm_default_cheaper   — a confident candidate existed but default won after cache
+        stayed_reason = (
+            "cache_aware:no_confident_candidate"
+            if len(candidates) == 1
+            else "cache_aware:warm_default_cheaper"
+        )
         return RouteDecision(
-            model_name=best.model_name,
-            reason="cache_aware:candidate_cheaper",
+            model_name=config.default,
+            reason=stayed_reason,
             probabilities=probabilities,
             estimated_costs=estimated_costs,
-            cache_prediction=best.cache_prediction.to_dict(),
+            cache_prediction=default_estimate.cache_prediction.to_dict(),
         )
 
-    # Stayed on default. Distinguish *why* so the cause is visible in telemetry:
-    #   no_confident_candidate — no non-default model cleared `confidence`
-    #   warm_default_cheaper   — a confident candidate existed but default won after cache
-    stayed_reason = (
-        "cache_aware:no_confident_candidate"
-        if len(eligible) == 1
-        else "cache_aware:warm_default_cheaper"
-    )
     return RouteDecision(
-        model_name=config.default,
-        reason=stayed_reason,
+        model_name=best.model_name,
+        reason="cache_aware:candidate_cheaper",
         probabilities=probabilities,
         estimated_costs=estimated_costs,
-        cache_prediction=baseline.cache_prediction.to_dict(),
+        cache_prediction=best.cache_prediction.to_dict(),
     )

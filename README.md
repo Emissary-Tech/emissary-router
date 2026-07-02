@@ -76,11 +76,12 @@ Toggle models in `~/.emissary-router/config.json`:
   "models": {
     "claude-sonnet-4.6": { "enabled": true, "provider": "anthropic" },
     "claude-haiku-4.5": { "enabled": true, "provider": "anthropic" },
-    "gemini-3.1-flash-lite": { "enabled": true, "provider": "openrouter" }
+    "gemini-3.1-flash-lite": { "enabled": true, "provider": "openrouter" },
+    "glm-5.2": { "enabled": true, "provider": "openrouter" },
+    "kimi-k2.7-code": { "enabled": true, "provider": "openrouter" }
   },
   "default": "claude-sonnet-4.6",
-  "confidence": 0.8,
-  "policy": "deviate_if_confident"
+  "confidence": 0.8
 }
 ```
 
@@ -89,16 +90,19 @@ Built-in models:
 - `claude-sonnet-4.6` — Anthropic or OpenRouter
 - `claude-haiku-4.5` — Anthropic or OpenRouter
 - `gemini-3.1-flash-lite` — OpenRouter
+- `glm-5.2` — OpenRouter
+- `kimi-k2.7-code` — OpenRouter (always reasons; thinking can't be disabled)
 
 Set `enabled: false` to drop a model, and `provider` to choose how it's served.
 Users cannot add arbitrary upstream models in V1; model id and pricing are owned by
 the built-in catalog.
 
-`policy` controls how routing chooses between them. The default `deviate_if_confident`
-picks the cheapest model the classifier is confident about. For long Claude Code
-sessions, set `"policy": "cache_aware"` so the router accounts for the prompt cache and
-avoids switching models in a way that would bust it (which can otherwise cost *more*
-than not routing at all). See [Configuration](docs/configuration.md) for details.
+Routing is confidence-gated and **cache-aware by default**: candidates the classifier
+is confident about are compared by cache-adjusted cost, so the router only switches
+models when it is genuinely cheaper after accounting for the prompt cache it would
+give up (naive per-request switching can cost *more* than not routing at all). Where a
+provider has no reliable cache signal this simply reduces to price-ordered routing.
+See [Configuration](docs/configuration.md) for details.
 
 ## Docs
 

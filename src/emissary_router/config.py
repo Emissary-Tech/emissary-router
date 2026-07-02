@@ -206,6 +206,9 @@ class AppConfig(BaseModel):
     models: dict[str, ModelEntry]
     default: str
     confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+    # Deprecated no-op, accepted so configs written by older versions still load.
+    # Routing is cache-aware by default now (falling back to plain price order
+    # wherever there is no cache signal) — there is no policy to choose.
     policy: Literal["deviate_if_confident", "cache_aware"] = "deviate_if_confident"
     router: RouterConfig = Field(default_factory=RouterConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)

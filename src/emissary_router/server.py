@@ -29,7 +29,7 @@ def create_app() -> FastAPI:
 
     def reload_config() -> None:
         # Rebuild the pipeline from the saved config so dashboard edits apply without
-        # a restart. Routing (enabled models, default, confidence, policy, provider) is
+        # a restart. Routing (enabled models, default, confidence, provider) is
         # taken from the new pipeline; in-flight requests keep the one they already read.
         # The cache ledger is carried over so the warm-cache state cache_aware relies on
         # survives a config save (it would otherwise reset on every edit).
@@ -56,7 +56,6 @@ def create_app() -> FastAPI:
         return {
             "ok": True,
             "default": request.app.state.config.default,
-            "policy": request.app.state.config.policy,
         }
 
     @app.post("/v1/messages")

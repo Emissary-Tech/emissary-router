@@ -106,6 +106,56 @@ def test_openrouter_haiku_effort_maps_to_budget_from_output_max_tokens() -> None
     assert "effort" not in req["reasoning"]
 
 
+def test_openrouter_glm_max_effort_maps_to_xhigh() -> None:
+    req = OpenRouterProvider.to_openai_request(
+        {"messages": [], "thinking": {"effort": "max"}},
+        "z-ai/glm-5.2",
+        model_name="glm-5.2",
+    )
+    assert req["reasoning"]["effort"] == "xhigh"
+
+
+def test_openrouter_glm_high_effort_preserved() -> None:
+    req = OpenRouterProvider.to_openai_request(
+        {"messages": [], "thinking": {"effort": "high"}},
+        "z-ai/glm-5.2",
+        model_name="glm-5.2",
+    )
+    assert req["reasoning"]["effort"] == "high"
+
+
+def test_openrouter_kimi_max_effort_maps_to_xhigh() -> None:
+    # Kimi routes via the effort param; max maps to xhigh (full reasoning budget).
+    req = OpenRouterProvider.to_openai_request(
+        {"messages": [], "max_tokens": 32000, "thinking": {"effort": "max"}},
+        "moonshotai/kimi-k2.7-code",
+        model_name="kimi-k2.7-code",
+    )
+    assert req["reasoning"]["effort"] == "xhigh"
+    assert "max_tokens" not in req["reasoning"]
+
+
+def test_openrouter_kimi_disabled_thinking_omits_reasoning() -> None:
+    # Kimi always reasons; OpenRouter 400s on effort:none ("Reasoning is mandatory ...
+    # cannot be disabled"). So a disable request must omit reasoning entirely.
+    req = OpenRouterProvider.to_openai_request(
+        {"messages": [], "thinking": {"type": "disabled"}},
+        "moonshotai/kimi-k2.7-code",
+        model_name="kimi-k2.7-code",
+    )
+    assert "reasoning" not in req
+
+
+def test_openrouter_disable_thinking_still_sends_none_for_normal_models() -> None:
+    # GLM (and others that can disable) still send the valid effort:none.
+    req = OpenRouterProvider.to_openai_request(
+        {"messages": [], "thinking": {"type": "disabled"}},
+        "z-ai/glm-5.2",
+        model_name="glm-5.2",
+    )
+    assert req["reasoning"] == {"effort": "none"}
+
+
 def test_openrouter_reasoning_budget_maps_to_max_tokens() -> None:
     req = OpenRouterProvider.to_openai_request(
         {"messages": [], "thinking": {"type": "enabled", "budget_tokens": 4096}},
@@ -231,26 +281,225 @@ def test_openrouter_response_maps_tool_call_and_cache_usage() -> None:
     assert message["content"][1]["type"] == "tool_use"
 
 
-def test_openrouter_anthropic_sse_contains_cache_usage() -> None:
-    message = {
-        "id": "msg_1",
-        "type": "message",
-        "role": "assistant",
-        "model": "gemini-3.1-flash-lite",
-        "content": [{"type": "text", "text": "done"}],
-        "stop_reason": "end_turn",
-        "stop_sequence": None,
-        "usage": {
-            "input_tokens": 200,
-            "output_tokens": 5,
-            "cache_read_input_tokens": 700,
-            "cache_creation_input_tokens": 100,
-        },
+def test_reasoning_text_prefers_flat_then_details_no_dup() -> None:
+    from emissary_router.providers.openrouter import _reasoning_text
+
+    assert _reasoning_text({"reasoning": "flat"}) == "flat"
+    assert _reasoning_text({"reasoning_details": [{"type": "reasoning.text", "text": "detailed"}]}) == "detailed"
+    # both present -> flat wins, no duplication
+    assert _reasoning_text({"reasoning": "flat", "reasoning_details": [{"text": "detailed"}]}) == "flat"
+    # signature-only detail (no text) -> nothing
+    assert _reasoning_text({"reasoning_details": [{"type": "reasoning.text", "signature": "sig"}]}) == ""
+    assert _reasoning_text({}) == ""
+
+
+def test_from_openai_response_surfaces_reasoning_as_thinking() -> None:
+    payload = {
+        "choices": [
+            {"message": {"reasoning": "glm thought", "content": "the answer"}, "finish_reason": "stop"}
+        ]
     }
+    msg = OpenRouterProvider.from_openai_response(payload, "glm-5.2")
+    assert [b["type"] for b in msg["content"]] == ["thinking", "text"]
+    assert msg["content"][0]["thinking"] == "glm thought"
+    assert msg["content"][0]["signature"] == "emissary:non-anthropic-reasoning"
+    assert msg["content"][1]["text"] == "the answer"
 
-    sse = b"".join(OpenRouterProvider.anthropic_sse(message)).decode()
 
-    assert "message_start" in sse
-    assert '"cache_read_input_tokens": 700' in sse
-    assert '"cache_creation_input_tokens": 100' in sse
-    assert '"output_tokens": 5' in sse
+def test_openrouter_trailing_system_becomes_positioned_user_reminder() -> None:
+    # Mid/trailing role:system messages must NOT fold into the leading system message:
+    # that would rewrite the prompt head each turn and bust the prefix-matched prompt
+    # cache. They convert in place to a user message; content is preserved either way.
+    body = {
+        "system": "main system",
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "system", "content": "<system-reminder>be concise</system-reminder>"},
+        ],
+    }
+    msgs = OpenRouterProvider._messages(body)
+    assert [m["role"] for m in msgs] == ["system", "user", "user"]
+    assert msgs[0]["content"] == "main system"  # head unchanged -> cache prefix stable
+    assert "be concise" in msgs[2]["content"]  # reminder preserved at its position
+    assert msgs[2]["content"].count("<system-reminder") == 1  # no double-wrap
+
+
+def test_openrouter_prompt_prefix_is_stable_across_turns_with_new_reminders() -> None:
+    # Cache-prefix regression guard: turn N's converted messages must be an exact
+    # prefix of turn N+1's, even when a NEW per-turn reminder appears — otherwise the
+    # provider's prefix-matched prompt cache misses the whole conversation each turn.
+    turn1 = {
+        "system": "main system",
+        "messages": [
+            {"role": "user", "content": "fix the bug"},
+            {"role": "system", "content": "<system-reminder>R1</system-reminder>"},
+        ],
+    }
+    turn2 = {
+        "system": "main system",
+        "messages": turn1["messages"] + [
+            {"role": "assistant", "content": [{"type": "text", "text": "done"}]},
+            {"role": "user", "content": "now add tests"},
+            {"role": "system", "content": "<system-reminder>R2</system-reminder>"},
+        ],
+    }
+    m1 = OpenRouterProvider._messages(turn1)
+    m2 = OpenRouterProvider._messages(turn2)
+    assert m2[: len(m1)] == m1  # byte-identical prefix; new content only appended
+
+
+def test_openrouter_leading_system_message_folds_into_system() -> None:
+    body = {
+        "system": "main system",
+        "messages": [
+            {"role": "system", "content": "extra setup"},
+            {"role": "user", "content": "hi"},
+        ],
+    }
+    msgs = OpenRouterProvider._messages(body)
+    assert [m["role"] for m in msgs] == ["system", "user"]
+    assert "main system" in msgs[0]["content"] and "extra setup" in msgs[0]["content"]
+
+
+def test_openrouter_stream_translation_reasoning_text_and_tools() -> None:
+    import asyncio
+    import json as _json
+
+    chunks = [
+        {"choices": [{"delta": {"role": "assistant", "reasoning": "thinking..."}}]},
+        {"choices": [{"delta": {"content": "Hel"}}]},
+        {"choices": [{"delta": {"content": "lo"}}]},
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "id": "call_1", "function": {"name": "Read", "arguments": '{"p":'}}
+        ]}}]},
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "function": {"arguments": "1}"}}
+        ]}, "finish_reason": "tool_calls"}]},
+        {"choices": [], "usage": {"prompt_tokens": 12, "completion_tokens": 7}},
+    ]
+    lines = ["data: " + _json.dumps(c) for c in chunks] + ["data: [DONE]"]
+
+    async def aiter():
+        for line in lines:
+            yield line
+
+    async def run():
+        sink: dict = {}
+        events = []
+        async for ev in OpenRouterProvider._iter_anthropic_events(aiter(), "kimi-k2.7-code", sink):
+            events.append(ev.decode())
+        return "".join(events), sink
+
+    text, sink = asyncio.run(run())
+
+    assert "event: message_start" in text
+    # reasoning surfaced as a thinking block (parity with native models), closed with the
+    # synthetic signature the Anthropic provider strips on later turns
+    assert '"type": "thinking"' in text
+    assert '"thinking_delta"' in text and '"thinking": "thinking..."' in text
+    assert '"signature_delta"' in text and "emissary:non-anthropic-reasoning" in text
+    assert '"type": "text"' in text and '"text": "Hel"' in text and '"text": "lo"' in text
+    assert '"type": "tool_use"' in text and '"name": "Read"' in text
+    assert '"input_json_delta"' in text
+    assert '"stop_reason": "tool_use"' in text
+    assert "event: message_stop" in text
+    assert sink["usage"]["completion_tokens"] == 7
+    # the final message_delta backfills CUMULATIVE usage so the client sees real
+    # input tokens (message_start had to carry zeros — usage arrives at stream end)
+    delta_part = text.split('"type": "message_delta"', 1)[1]
+    assert '"input_tokens": 12' in delta_part
+    assert '"output_tokens": 7' in delta_part
+
+
+def _run_translation(chunks):
+    import asyncio
+    import json as _json
+
+    lines = ["data: " + _json.dumps(c) for c in chunks] + ["data: [DONE]"]
+
+    async def aiter():
+        for line in lines:
+            yield line
+
+    async def run():
+        sink: dict = {}
+        events = []
+        async for ev in OpenRouterProvider._iter_anthropic_events(aiter(), "m", sink):
+            events.append(_json.loads(ev.decode().split("data: ", 1)[1]))
+        return events, sink
+
+    return asyncio.run(run())
+
+
+def test_interleaved_parallel_tool_calls_keep_their_blocks() -> None:
+    # OpenAI deltas may interleave fragments of parallel tool calls (0/1/0/1);
+    # continuations carry no id/name. Each fragment must route to ITS block — never
+    # fabricate an "unknown_tool" block with split JSON.
+    events, _ = _run_translation([
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "id": "call_a", "function": {"name": "Read", "arguments": '{"p":'}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 1, "id": "call_b", "function": {"name": "Write", "arguments": '{"q":'}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "function": {"arguments": '1}'}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 1, "function": {"arguments": '2}'}}]}, "finish_reason": "tool_calls"}]},
+    ])
+
+    starts = {e["index"]: e["content_block"] for e in events if e["type"] == "content_block_start"}
+    names = [b["name"] for b in starts.values() if b["type"] == "tool_use"]
+    assert sorted(names) == ["Read", "Write"]  # exactly two tools, no unknown_tool
+    read_idx = next(i for i, b in starts.items() if b.get("name") == "Read")
+    write_idx = next(i for i, b in starts.items() if b.get("name") == "Write")
+    args = {read_idx: "", write_idx: ""}
+    for e in events:
+        if e["type"] == "content_block_delta" and e["delta"]["type"] == "input_json_delta":
+            args[e["index"]] += e["delta"]["partial_json"]
+    assert args[read_idx] == '{"p":1}'  # JSON intact per tool
+    assert args[write_idx] == '{"q":2}'
+
+
+def test_reasoning_between_tool_fragments_does_not_orphan_the_tool() -> None:
+    events, _ = _run_translation([
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "id": "call_a", "function": {"name": "Read", "arguments": '{"p":'}}]}}]},
+        {"choices": [{"delta": {"reasoning": "hmm"}}]},
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "function": {"arguments": '1}'}}]}, "finish_reason": "tool_calls"}]},
+    ])
+    tool_starts = [e for e in events if e["type"] == "content_block_start"
+                   and e["content_block"]["type"] == "tool_use"]
+    assert len(tool_starts) == 1 and tool_starts[0]["content_block"]["name"] == "Read"
+    joined = "".join(e["delta"]["partial_json"] for e in events
+                     if e["type"] == "content_block_delta" and e["delta"]["type"] == "input_json_delta")
+    assert joined == '{"p":1}'
+
+
+def test_openrouter_stream_records_usage_before_trailing_events() -> None:
+    # A cancel/drop after the usage chunk but before message_stop must still record
+    # real usage in sink (telemetry), not zeros.
+    import asyncio
+    import json as _json
+
+    chunks = [
+        {"choices": [{"delta": {"content": "hi"}}]},
+        {"choices": [], "usage": {"prompt_tokens": 40, "completion_tokens": 9}},
+    ]
+    lines = ["data: " + _json.dumps(c) for c in chunks]  # no [DONE]: stream severed early
+
+    async def aiter():
+        for line in lines:
+            yield line
+        raise RuntimeError("connection reset mid-stream")
+
+    async def run():
+        sink: dict = {}
+        try:
+            async for _ in OpenRouterProvider._iter_anthropic_events(aiter(), "glm-5.2", sink):
+                pass
+        except RuntimeError:
+            pass
+        return sink
+
+    sink = asyncio.run(run())
+    assert sink["usage"]["prompt_tokens"] == 40  # recorded the moment it arrived

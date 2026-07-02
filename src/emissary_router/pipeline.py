@@ -15,6 +15,7 @@ from emissary_router.config import AppConfig, ProviderConfig
 from emissary_router.schemas import AnthropicRequest, RequestContext, RouteDecision
 from emissary_router.providers.registry import build_provider
 from emissary_router.routing.classifier import ClassifierClient
+from emissary_router.providers.thinking import always_on_reasoning_models
 from emissary_router.routing.cache_cost import extract_request_cost_features
 from emissary_router.routing.policy import choose_model
 from emissary_router.routing.request_to_classifier_input import request_to_classifier_input
@@ -99,9 +100,14 @@ class RouterPipeline:
                     },
                     status_code=502,
                 )
+            # Background (title/summary) calls run with thinking disabled; don't route
+            # them to always-on-reasoning models that can't honor that (and that reason
+            # on a utility call, wasting cost/latency).
+            skip = always_on_reasoning_models() if call_kind == "background" else frozenset()
             decision = choose_model(
                 self._config,
                 probabilities,
+                skip_models=skip,
                 cost_features=cost_features,
                 cache_ledger=self._cache_ledger,
             )

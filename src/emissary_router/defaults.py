@@ -10,11 +10,12 @@ CONFIG_TEMPLATE = """{
   "models": {
     "claude-sonnet-4.6": { "enabled": true, "provider": "anthropic" },
     "claude-haiku-4.5": { "enabled": true, "provider": "anthropic" },
-    "gemini-3.1-flash-lite": { "enabled": true, "provider": "openrouter" }
+    "gemini-3.1-flash-lite": { "enabled": true, "provider": "openrouter" },
+    "glm-5.2": { "enabled": true, "provider": "openrouter" },
+    "kimi-k2.7-code": { "enabled": true, "provider": "openrouter" }
   },
   "default": "claude-sonnet-4.6",
   "confidence": 0.8,
-  "policy": "deviate_if_confident",
   "router": { "router_model": "emissary-model-router-shared" },
   "server": { "port": 8788 },
   "telemetry": { "enabled": true, "retention_days": 30, "max_events": 50000 }

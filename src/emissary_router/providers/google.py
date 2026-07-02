@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from copy import deepcopy
 from typing import Any
@@ -11,11 +12,31 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from emissary_router.caching.usage import Usage
 from emissary_router.config import ProviderConfig, ResolvedModel
 from emissary_router.schemas import AnthropicRequest, RequestContext
-from emissary_router.providers.base import ProviderComplete
+from emissary_router.providers.base import ProviderComplete, sanitize_tool_id
 from emissary_router.providers.thinking import (
+    SYNTHETIC_THINKING_SIGNATURE,
     effort_reasoning_for_model,
     extract_reasoning_settings,
 )
+
+logger = logging.getLogger(__name__)
+
+# Gemini 3 validates that functionCall parts in replayed history carry the
+# thoughtSignature it originally emitted ("Function call is missing a
+# thought_signature in functionCall parts" -> 400, live-verified). Tool calls made by
+# OTHER models (sonnet/haiku/glm/kimi) never had one, and Claude Code's
+# Anthropic-format history can't carry Gemini's. Google documents this exact dummy
+# value as the sanctioned bypass for history imported from other models.
+DUMMY_THOUGHT_SIGNATURE = "context_engineering_is_the_way_to_go"
+
+
+def _request_summary(body: dict[str, Any]) -> str:
+    contents = body.get("contents") or []
+    roles = [c.get("role") for c in contents if isinstance(c, dict)]
+    return (
+        f"contents_roles={roles} tools={len(body.get('tools') or [])} "
+        f"generationConfig={body.get('generationConfig')} top_keys={sorted(body.keys())}"
+    )
 
 
 class GoogleProvider:
@@ -73,6 +94,12 @@ class GoogleProvider:
         )
 
         if response.status_code >= 400:
+            logger.warning(
+                "google upstream %s | %s | error_body=%s",
+                response.status_code,
+                _request_summary(gemini_body),
+                response.text[:800],
+            )
             return JSONResponse(payload, status_code=response.status_code)
 
         message = self.from_google_response(payload, model.name)
@@ -123,8 +150,13 @@ class GoogleProvider:
         parts = ((candidate.get("content") or {}).get("parts") or [])
         content: list[dict[str, Any]] = []
 
+        thought_text: list[str] = []
         for part in parts:
             if part.get("thought"):
+                # Surface Gemini's thought summary like the other providers do, stamped
+                # with the synthetic signature the Anthropic provider strips later.
+                if part.get("text"):
+                    thought_text.append(part["text"])
                 continue
             if "text" in part:
                 text = part.get("text") or ""
@@ -132,14 +164,26 @@ class GoogleProvider:
                     content.append({"type": "text", "text": text})
             if "functionCall" in part:
                 call = part.get("functionCall") or {}
-                content.append(
-                    {
-                        "type": "tool_use",
-                        "id": call.get("id") or f"toolu_{uuid.uuid4().hex[:24]}",
-                        "name": call.get("name") or "unknown_tool",
-                        "input": call.get("args") or {},
-                    }
-                )
+                block: dict[str, Any] = {
+                    "type": "tool_use",
+                    "id": sanitize_tool_id(call.get("id")) or f"toolu_{uuid.uuid4().hex[:24]}",
+                    "name": call.get("name") or "unknown_tool",
+                    "input": call.get("args") or {},
+                }
+                # Keep Gemini's real signature with the call so a gemini->gemini replay
+                # can send it back verbatim (best-effort: the dummy bypass covers loss).
+                if part.get("thoughtSignature"):
+                    block["thought_signature"] = part["thoughtSignature"]
+                content.append(block)
+        if thought_text:
+            content.insert(
+                0,
+                {
+                    "type": "thinking",
+                    "thinking": "\n".join(thought_text),
+                    "signature": SYNTHETIC_THINKING_SIGNATURE,
+                },
+            )
 
         if not content:
             content.append({"type": "text", "text": ""})
@@ -191,6 +235,34 @@ class GoogleProvider:
                         "delta": {"type": "text_delta", "text": block["text"]},
                     },
                 )
+            elif block["type"] == "thinking":
+                yield cls._sse(
+                    "content_block_start",
+                    {
+                        "type": "content_block_start",
+                        "index": index,
+                        "content_block": {"type": "thinking", "thinking": ""},
+                    },
+                )
+                yield cls._sse(
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": index,
+                        "delta": {"type": "thinking_delta", "thinking": block["thinking"]},
+                    },
+                )
+                yield cls._sse(
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": index,
+                        "delta": {
+                            "type": "signature_delta",
+                            "signature": block.get("signature", SYNTHETIC_THINKING_SIGNATURE),
+                        },
+                    },
+                )
             else:
                 yield cls._sse(
                     "content_block_start",
@@ -233,12 +305,34 @@ class GoogleProvider:
 
     @classmethod
     def _contents_and_system(cls, body: dict) -> tuple[list[dict[str, Any]], str]:
-        system_instruction = cls._stringify(body.get("system", ""))
+        system_parts: list[str] = []
+        top_system = cls._stringify(body.get("system", ""))
+        if top_system:
+            system_parts.append(top_system)
         tool_names_by_id: dict[str, str] = {}
         contents: list[dict[str, Any]] = []
+        leading = True
 
         for message in body.get("messages", []) or []:
             role = message.get("role")
+
+            if role == "system":
+                # Same normalization as the other providers: leading system messages
+                # join the system instruction; mid/trailing ones are per-turn reminders
+                # and stay at their position (as user text) so the prompt head — and
+                # with it the provider's prefix cache — stays byte-stable.
+                inline = cls._stringify(message.get("content"))
+                if not inline:
+                    continue
+                if leading:
+                    system_parts.append(inline)
+                else:
+                    if "<system-reminder" not in inline:
+                        inline = f"<system-reminder>\n{inline}\n</system-reminder>"
+                    contents.append({"role": "user", "parts": [{"text": inline}]})
+                continue
+            leading = False
+
             blocks = cls._blocks(message.get("content"))
             parts: list[dict[str, Any]] = []
 
@@ -256,7 +350,13 @@ class GoogleProvider:
                                 "functionCall": {
                                     "name": name,
                                     "args": block.get("input") or {},
-                                }
+                                },
+                                # Gemini 3 rejects replayed functionCall parts without a
+                                # thoughtSignature. Use the real one when the block
+                                # carries it (a prior native-Gemini turn); otherwise the
+                                # documented cross-model bypass value.
+                                "thoughtSignature": block.get("thought_signature")
+                                or DUMMY_THOUGHT_SIGNATURE,
                             }
                         )
                 if parts:
@@ -288,7 +388,7 @@ class GoogleProvider:
                 if parts:
                     contents.append({"role": "user", "parts": parts})
 
-        return contents, system_instruction
+        return contents, "\n\n".join(system_parts)
 
     @classmethod
     def _tools(cls, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -47,7 +47,6 @@ def test_cache_ledger_survives_config_reload(tmp_path, monkeypatch):
                 },
                 "default": "claude-sonnet-4.6",
                 "confidence": 0.8,
-                "policy": "cache_aware",
                 "telemetry": {"enabled": True, "db_path": str(tmp_path / "e.sqlite3")},
             }
         )

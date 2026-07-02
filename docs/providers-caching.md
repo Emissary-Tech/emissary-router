@@ -8,6 +8,8 @@ by the catalog, not your config.
 | `claude-sonnet-4.6` | Anthropic | `claude-sonnet-4-6` |
 | `claude-haiku-4.5` | Anthropic | `claude-haiku-4-5` |
 | `gemini-3.1-flash-lite` | OpenRouter | `google/gemini-3.1-flash-lite` |
+| `glm-5.2` | OpenRouter | `z-ai/glm-5.2` |
+| `kimi-k2.7-code` | OpenRouter | `moonshotai/kimi-k2.7-code` |
 
 Provider API keys come from the environment (`ANTHROPIC_API_KEY`,
 `OPENROUTER_API_KEY`), loaded from `~/.emissary-router/.env` if present. Only the
@@ -23,10 +25,14 @@ OpenRouter, which handles this for Claude Code workloads.
 
 ## Streaming
 
-For OpenRouter, Emissary Router calls the provider non-streaming and synthesizes
-Anthropic SSE when Claude Code asked for a stream. This avoids fragile streaming
-tool-call translation while still presenting a normal streaming response to Claude
-Code.
+OpenRouter requests stream for real: the provider's OpenAI-format SSE is translated
+to Anthropic SSE as chunks arrive — reasoning as a live thinking block, text deltas,
+and incremental tool calls (per-index, safe under interleaving). Since the Claude
+Code update thinking is on by default, so generations routinely reason at length
+before the first output token; live translation keeps the client fed the whole time
+instead of buffering until the end. Upstream errors before any bytes are sent return
+their real HTTP status; mid-stream failures emit a terminal SSE `error` event.
+Anthropic requests were always a raw streaming passthrough.
 
 ## Caching
 
@@ -38,16 +44,50 @@ router preserves each provider's native mechanism rather than managing caches it
   (`strip_dynamic_attribution`) so the prompt prefix stays byte-stable and the
   provider's prefix cache keeps hitting.
 - OpenRouter: Claude models use OpenRouter/Anthropic cache accounting where
-  available; Gemini uses provider-native implicit caching behind OpenRouter.
+  available; Gemini, GLM, and Kimi use implicit (automatic) caching.
 - Native Google: explicit `CachedContent` lifecycle management is out of scope in V1.
 
 Cache reads/writes are recorded in [telemetry](telemetry.md) when the provider
 reports them.
 
-`cache_aware` routing treats cache predictions with two confidence levels:
+### Cache support by provider and model
 
-- `predictable` — Anthropic direct cache accounting. The router can trust observed
-  cache creation/read signals enough to use them in the next cost estimate.
-- `best_effort` — implicit/provider-mediated cache behavior such as Gemini through
-  OpenRouter. Matching prefix + TTL is only a hint, so the router does not discount it
-  as warm until it has observed an actual cache read.
+| Model | anthropic | openrouter |
+|---|---|---|
+| `claude-sonnet-4.6` | ✅ explicit prompt cache | ✅ Anthropic cache accounting via OpenRouter |
+| `claude-haiku-4.5` | ✅ explicit prompt cache | ✅ Anthropic cache accounting via OpenRouter |
+| `gemini-3.1-flash-lite` | — | ⚠️ implicit, per-host |
+| `glm-5.2` | — | ⚠️ implicit, per-host |
+| `kimi-k2.7-code` | — | ⚠️ implicit, per-host |
+
+- ✅ — deterministic caching: `cache_control` breakpoints pass through and cache
+  reads/writes are reported reliably, so the router can trust them for its cost
+  estimates (`predictable` tier).
+- ⚠️ — implicit (automatic) caching with **per-host** caches behind OpenRouter's load
+  balancer: a hit needs the request to re-land on a host that recently served the same
+  prefix, so hits are opportunistic rather than guaranteed. The router only credits
+  these caches after an *observed* hit (`best_effort` tier) and never assumes one.
+- Universally: a cache never carries across providers or models — switching the served
+  model always starts cold on the new one. The router prices exactly that when it
+  decides whether switching is worth it.
+
+### Implicit caching on OpenRouter (gemini / glm / kimi)
+
+Implicit caching has no write premium, so `cache_creation_tokens` is always 0 for
+these models **by design**: the first (cold) call bills the whole prompt at the plain
+input rate, which is exactly what telemetry records. Discounted `cache_read_tokens`
+appear only when the serving host reports a hit.
+
+Hits are best-effort. OpenRouter load-balances each request across multiple serving
+hosts and implicit prefix caches are **per host**, so a hit needs the request to
+re-land on a host that served the same prefix recently (measured: a repeated
+~4k-token prefix on `glm-5.2` bounced across five hosts and hit only on a same-host
+re-land; pinned to a single host, both glm and kimi hit on every call after the cold
+one — though one identical pinned run on kimi's first-party host reported no hits at
+all, so warm-up is not fully deterministic even then). OpenRouter's own billed `cost`
+tracks `cached_tokens` exactly (cold ~4.2x the warm price on the same host, measured
+on kimi), so there is no silent discounting: rows showing `cached 0` really were
+billed at the input rate, and telemetry's conservative recording matches the actual
+bill in both directions. Pinning OpenRouter provider order would make hits mostly
+deterministic but changes which host (and price) serves the model, so it is
+deliberately not configured in V1.

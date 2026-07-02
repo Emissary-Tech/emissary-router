@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from copy import deepcopy
 
@@ -11,9 +12,77 @@ from emissary_router.caching.usage import Usage
 from emissary_router.config import ProviderConfig, ResolvedModel
 from emissary_router.schemas import AnthropicRequest, RequestContext
 from emissary_router.providers.base import ProviderComplete
-from emissary_router.providers.thinking import normalize_anthropic_thinking_for_model
+from emissary_router.providers.base import sanitize_tool_id
+from emissary_router.providers.thinking import (
+    SYNTHETIC_THINKING_SIGNATURE,
+    normalize_anthropic_thinking_for_model,
+)
 
 CCH_ATTRIBUTION_LINE_RE = re.compile(r"(?m)^.*\bcch=[^\s<>\"]+.*(?:\n|$)")
+
+logger = logging.getLogger(__name__)
+
+
+def _system_blocks(content) -> list[dict]:
+    """Normalize a system message's content (str / dict / list) to Anthropic blocks."""
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}] if content else []
+    if isinstance(content, dict):
+        return [content]
+    if isinstance(content, list):
+        return [
+            block if isinstance(block, dict) else {"type": "text", "text": str(block)}
+            for block in content
+            if block
+        ]
+    return []
+
+
+def _system_text(content) -> str:
+    """Flatten a system message's content to plain text (for reminder conversion)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict):
+        return content.get("text", "") if content.get("type") == "text" else ""
+    if isinstance(content, list):
+        return "\n".join(
+            block.get("text", "")
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        ).strip()
+    return ""
+
+
+def _invalid_tool_ids(body: dict) -> list[str]:
+    """Tool ids in the outbound body that violate Anthropic's id pattern — logged on
+    4xx so an id-pattern rejection can be attributed to the exact minting value/turn
+    instead of guessed at."""
+    from emissary_router.providers.base import TOOL_ID_RE
+
+    bad: list[str] = []
+    for message in body.get("messages") or []:
+        if not isinstance(message, dict) or not isinstance(message.get("content"), list):
+            continue
+        for block in message["content"]:
+            if not isinstance(block, dict):
+                continue
+            for key in ("id", "tool_use_id"):
+                value = block.get(key)
+                if isinstance(value, str) and value and not TOOL_ID_RE.fullmatch(value):
+                    bad.append(value)
+    return bad
+
+
+def _request_summary(body: dict) -> str:
+    messages = body.get("messages") or []
+    roles = [m.get("role") for m in messages if isinstance(m, dict)]
+    system = body.get("system")
+    system_kind = "list" if isinstance(system, list) else ("str" if isinstance(system, str) else "none")
+    return (
+        f"model={body.get('model')} stream={bool(body.get('stream'))} "
+        f"msg_roles={roles} system={system_kind} thinking={body.get('thinking')} "
+        f"top_keys={sorted(body.keys())}"
+    )
 
 
 class AnthropicProvider:
@@ -31,6 +100,13 @@ class AnthropicProvider:
         on_complete: ProviderComplete | None = None,
     ) -> Response:
         body = deepcopy(request.body)
+        # Claude Code (targeting a newer model) can put a role:"system" message inside
+        # `messages`; an older served model rejects it ("role 'system' is not supported
+        # on this model"). Move that content into the top-level `system` field.
+        self._hoist_system_messages(body)
+        # Drop thinking blocks we synthesized from another provider's reasoning on a
+        # prior turn — their signature is not valid to Anthropic and would 400.
+        self._strip_synthetic_thinking(body)
         if self._config.cache.strip_dynamic_attribution:
             self._strip_cch_attribution(body)
         thinking_changes = normalize_anthropic_thinking_for_model(body, model.name)
@@ -61,6 +137,14 @@ class AnthropicProvider:
                         error = repr(exc)
                         raise
                     finally:
+                        if status is not None and status >= 400:
+                            logger.warning(
+                                "anthropic upstream %s | %s | bad_tool_ids=%s | error_body=%s",
+                                status,
+                                _request_summary(body),
+                                _invalid_tool_ids(body),
+                                buf.decode("utf-8", "replace")[:800],
+                            )
                         self._complete(
                             on_complete,
                             self._usage_from_sse(buf.decode("utf-8", "replace")),
@@ -76,6 +160,14 @@ class AnthropicProvider:
 
         async with httpx.AsyncClient(timeout=None) as client:
             response = await client.post(f"{self._base_url}/v1/messages", headers=headers, json=body)
+        if response.status_code >= 400:
+            logger.warning(
+                "anthropic upstream %s | %s | bad_tool_ids=%s | error_body=%s",
+                response.status_code,
+                _request_summary(body),
+                _invalid_tool_ids(body),
+                response.text[:800],
+            )
         try:
             payload = response.json()
             self._complete(
@@ -113,6 +205,117 @@ class AnthropicProvider:
             cache_read_input_tokens=usage.get("cache_read_input_tokens", 0),
             cache_creation_input_tokens=usage.get("cache_creation_input_tokens", 0),
         )
+
+    @staticmethod
+    def _hoist_system_messages(body: dict) -> None:
+        """Normalize role:"system" messages for models that reject them inline.
+
+        LEADING system messages (before any user/assistant turn) are the initial system
+        prompt — they belong in the top-level `system` field. MID/TRAILING ones are
+        per-turn reminders: they are converted IN PLACE to user messages wrapped in
+        <system-reminder> tags. Hoisting those to the head would rewrite the first
+        bytes of the prompt whenever a reminder changes, invalidating the provider's
+        prefix-matched prompt cache for the entire conversation.
+        """
+        messages = body.get("messages")
+        if not isinstance(messages, list):
+            return
+        hoisted: list[dict] = []
+        remaining: list = []
+        leading = True
+        changed = False
+        for message in messages:
+            if not (isinstance(message, dict) and message.get("role") == "system"):
+                if isinstance(message, dict) and message.get("role") in ("user", "assistant"):
+                    leading = False
+                remaining.append(message)
+                continue
+            changed = True
+            if leading:
+                hoisted.extend(_system_blocks(message.get("content")))
+            else:
+                text = _system_text(message.get("content"))
+                if text:
+                    if "<system-reminder" not in text:
+                        text = f"<system-reminder>\n{text}\n</system-reminder>"
+                    remaining.append({"role": "user", "content": [{"type": "text", "text": text}]})
+        if not changed:
+            return
+        body["messages"] = remaining
+        if hoisted:
+            existing = body.get("system")
+            if isinstance(existing, str):
+                existing = [{"type": "text", "text": existing}] if existing else []
+            elif isinstance(existing, list):
+                existing = list(existing)
+            else:
+                existing = []
+            body["system"] = existing + hoisted
+
+    @staticmethod
+    def _strip_synthetic_thinking(body: dict) -> None:
+        """Remove residue that other providers' turns leave in the history.
+
+        - thinking blocks bearing our synthetic signature (Anthropic rejects the
+          signature as invalid);
+        - `thought_signature` keys on tool_use blocks (Gemini's signature, preserved
+          for gemini->gemini replay; Anthropic 400s "Extra inputs are not permitted");
+        - tool ids outside Anthropic's `^[a-zA-Z0-9_-]+$` pattern (Kimi emits e.g.
+          "functions.get_weather:0"), sanitized deterministically on BOTH the tool_use
+          id and the matching tool_result tool_use_id so pairing is preserved.
+        """
+        messages = body.get("messages")
+        if not isinstance(messages, list):
+            return
+        cleaned: list = []
+        changed = False
+        for message in messages:
+            if not (isinstance(message, dict) and isinstance(message.get("content"), list)):
+                cleaned.append(message)
+                continue
+            role = message.get("role")
+            content = message["content"]
+            kept = []
+            message_changed = False
+            for block in content:
+                if not isinstance(block, dict):
+                    kept.append(block)
+                    continue
+                if (
+                    role == "assistant"
+                    and block.get("type") == "thinking"
+                    and block.get("signature") == SYNTHETIC_THINKING_SIGNATURE
+                ):
+                    message_changed = True
+                    continue
+                if role == "assistant" and block.get("type") == "tool_use":
+                    new_block = block
+                    if "thought_signature" in new_block:
+                        new_block = {k: v for k, v in new_block.items() if k != "thought_signature"}
+                    fixed = sanitize_tool_id(new_block.get("id"))
+                    if fixed != new_block.get("id"):
+                        new_block = {**new_block, "id": fixed}
+                    if new_block is not block:
+                        block = new_block
+                        message_changed = True
+                if role == "user" and block.get("type") == "tool_result":
+                    fixed = sanitize_tool_id(block.get("tool_use_id"))
+                    if fixed != block.get("tool_use_id"):
+                        block = {**block, "tool_use_id": fixed}
+                        message_changed = True
+                kept.append(block)
+            if not message_changed:
+                cleaned.append(message)
+                continue
+            changed = True
+            if kept:
+                message["content"] = kept
+                cleaned.append(message)
+            # else: drop the message entirely. An empty-text placeholder is NOT an
+            # option — Anthropic 400s with "text content blocks must be non-empty" —
+            # and consecutive user turns are accepted (merged), so dropping is safe.
+        if changed:
+            body["messages"] = cleaned
 
     @staticmethod
     def _strip_cch_attribution(body: dict) -> None:

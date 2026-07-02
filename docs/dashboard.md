@@ -35,11 +35,11 @@ or send the key as an `x-api-key` or `Authorization: Bearer` header.
 - **Sessions** — calls grouped by Claude Code session (one `er code` run ≈ one
   session): last activity, short session id, call counts (main / background), models
   used, and total cost. Delete a whole session with its button.
-- **Settings** — toggle models on/off, choose a provider per model, set the default
-  model and confidence, and pick the routing [policy](configuration.md#policy). Saving
+- **Settings** — toggle models on/off, choose a provider per model, and set the default
+  model and confidence. Saving
   writes your config and the running gateway reloads it live — no restart needed. The
-  in-memory cache ledger that `cache_aware` uses is carried across saves, so editing
-  config does not throw away warm-cache state (only a process restart resets it).
+  in-memory cache ledger that routing uses is carried across saves, so editing config
+  does not throw away warm-cache state (only a process restart resets it).
 
 Data does not auto-refresh; use the **↻ Refresh** button to pull the latest.
 
@@ -58,7 +58,6 @@ The dashboard is backed by a small JSON API under the same auth as the page:
 - `GET /api/summary` — savings totals and per-model aggregates
 - `GET /api/events?limit=&session=` — recent rows
 - `GET /api/sessions?limit=` — per-session rollup
-- `GET /api/config`, `PUT /api/config` — read / update model toggles, default,
-  confidence, and policy
+- `GET /api/config`, `PUT /api/config` — read / update model toggles, default, confidence
 - `DELETE /api/events/{id}` — delete one row
 - `DELETE /api/sessions/{id}` — delete a whole session
