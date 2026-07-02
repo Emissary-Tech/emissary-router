@@ -76,7 +76,9 @@ Toggle models in `~/.emissary-router/config.json`:
   "models": {
     "claude-sonnet-4.6": { "enabled": true, "provider": "anthropic" },
     "claude-haiku-4.5": { "enabled": true, "provider": "anthropic" },
-    "gemini-3.1-flash-lite": { "enabled": true, "provider": "openrouter" }
+    "gemini-3.1-flash-lite": { "enabled": true, "provider": "openrouter" },
+    "glm-5.2": { "enabled": true, "provider": "openrouter" },
+    "kimi-k2.7-code": { "enabled": true, "provider": "openrouter" }
   },
   "default": "claude-sonnet-4.6",
   "confidence": 0.8
@@ -88,6 +90,8 @@ Built-in models:
 - `claude-sonnet-4.6` — Anthropic or OpenRouter
 - `claude-haiku-4.5` — Anthropic or OpenRouter
 - `gemini-3.1-flash-lite` — OpenRouter
+- `glm-5.2` — OpenRouter
+- `kimi-k2.7-code` — OpenRouter (always reasons; thinking can't be disabled)
 
 Set `enabled: false` to drop a model, and `provider` to choose how it's served.
 Users cannot add arbitrary upstream models in V1; model id and pricing are owned by

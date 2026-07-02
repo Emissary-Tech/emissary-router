@@ -10,12 +10,22 @@ DEFAULT_MAX_THINKING_BUDGET = 32000
 EFFORT_KEYS = {"effort", "reasoning_effort", "thinking_effort"}
 SKIP_REWRITE_KEYS = {"messages", "system", "tools"}
 
+# Signature stamped on thinking blocks we synthesize from a non-Anthropic provider's
+# reasoning (e.g. OpenRouter/GLM/Kimi). Claude Code surfaces them like any thinking
+# block, but they carry no valid Anthropic signature — so the Anthropic provider strips
+# any history block bearing this marker before forwarding, or Anthropic 400s with
+# "Invalid `signature` in `thinking` block".
+SYNTHETIC_THINKING_SIGNATURE = "emissary:non-anthropic-reasoning"
+
 
 @dataclass(frozen=True)
 class ModelThinkingCapabilities:
     accepts_effort_param: bool = False
     accepts_adaptive_thinking: bool = False
     max_effort: str | None = None
+    # Some models always reason and reject a disable request (OpenRouter returns 400
+    # "Reasoning is mandatory ... cannot be disabled"). For those, never emit effort:none.
+    can_disable_thinking: bool = True
 
 
 THINKING_CAPABILITIES = {
@@ -32,6 +42,23 @@ THINKING_CAPABILITIES = {
         accepts_effort_param=True,
         accepts_adaptive_thinking=False,
         max_effort="high",
+    ),
+    # OpenRouter: GLM-5.2 supports reasoning effort high/xhigh (xhigh == max).
+    "glm-5.2": ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=False,
+        max_effort="xhigh",
+    ),
+    # OpenRouter: Kimi K2.7 Code reasons via the effort param (OpenRouter maps the level
+    # to a reasoning budget; xhigh ~= 95% of max_tokens). It always reasons — thinking
+    # can't be disabled — so on a disable request the reasoning field is OMITTED
+    # entirely (sending effort:none gets a 400 "Reasoning is mandatory ... cannot be
+    # disabled"). xhigh is allowed so a max-effort request gets full reasoning budget.
+    "kimi-k2.7-code": ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=False,
+        max_effort="xhigh",
+        can_disable_thinking=False,
     ),
 }
 
@@ -93,6 +120,19 @@ def normalize_effort(effort: str | None, max_effort: str = "high") -> str | None
 def max_effort_for_model(model_name: str, default: str = "high") -> str:
     capabilities = THINKING_CAPABILITIES.get(model_name)
     return capabilities.max_effort if capabilities and capabilities.max_effort else default
+
+
+def can_disable_thinking_for_model(model_name: str, default: bool = True) -> bool:
+    capabilities = THINKING_CAPABILITIES.get(model_name)
+    return capabilities.can_disable_thinking if capabilities else default
+
+
+def always_on_reasoning_models() -> set[str]:
+    """Models that always reason and can't be sent a disable — not appropriate for
+    non-thinking (background) calls."""
+    return {
+        name for name, cap in THINKING_CAPABILITIES.items() if not cap.can_disable_thinking
+    }
 
 
 def accepts_effort_for_model(model_name: str, default: bool = True) -> bool:

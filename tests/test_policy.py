@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from emissary_router.config import AppConfig
+from emissary_router.providers.thinking import always_on_reasoning_models
 from emissary_router.routing.policy import choose_model
 
 
@@ -44,3 +45,77 @@ def test_falls_back_to_default_when_no_model_is_confident() -> None:
 
     assert decision.model_name == "claude-sonnet-4.6"
     assert decision.reason == "default"
+
+
+def _config_with_kimi() -> AppConfig:
+    return AppConfig.model_validate(
+        {
+            "models": {
+                "gemini-3.1-flash-lite": True,
+                "kimi-k2.7-code": True,
+                "claude-haiku-4.5": True,
+                "claude-sonnet-4.6": True,
+            },
+            "default": "claude-sonnet-4.6",
+            "confidence": 0.8,
+        }
+    )
+
+
+def test_background_with_always_on_default_falls_back_to_cheapest_usable() -> None:
+    # A user may set an always-on-reasoning model as default. Background calls run with
+    # thinking disabled, so serving that default would burn reasoning tokens on every
+    # title/summary call — fall back to the cheapest model that can disable thinking.
+    config = AppConfig.model_validate(
+        {
+            "models": {
+                "gemini-3.1-flash-lite": True,
+                "kimi-k2.7-code": True,
+                "claude-sonnet-4.6": True,
+            },
+            "default": "kimi-k2.7-code",
+            "confidence": 0.8,
+        }
+    )
+    probs = {m: 0.1 for m in config.enabled_models()}  # nobody confident
+
+    decision = choose_model(config, probs, skip_models=always_on_reasoning_models())
+    assert decision.model_name == "gemini-3.1-flash-lite"  # cheapest usable
+    assert decision.reason == "default_unsuitable:cheapest_alternative"
+
+    # main call (no skip): the configured default serves as usual
+    assert choose_model(config, probs).model_name == "kimi-k2.7-code"
+
+
+def test_background_serves_default_when_everything_is_skipped() -> None:
+    config = AppConfig.model_validate(
+        {
+            "models": {"kimi-k2.7-code": True},
+            "default": "kimi-k2.7-code",
+            "confidence": 0.8,
+        }
+    )
+    decision = choose_model(
+        config, {"kimi-k2.7-code": 0.1}, skip_models=always_on_reasoning_models()
+    )
+    assert decision.model_name == "kimi-k2.7-code"  # nothing better exists
+    assert decision.reason == "default"
+
+
+def test_background_skips_always_on_reasoning_models() -> None:
+    config = _config_with_kimi()
+    probs = {
+        "gemini-3.1-flash-lite": 0.2,
+        "kimi-k2.7-code": 0.95,  # confident, cheapest confident -> would win normally
+        "claude-haiku-4.5": 0.1,
+        "claude-sonnet-4.6": 0.1,
+    }
+
+    # main call: kimi wins
+    assert choose_model(config, probs).model_name == "kimi-k2.7-code"
+
+    # background call: kimi (always-on reasoning) is skipped -> nobody else confident -> default
+    decision = choose_model(config, probs, skip_models=always_on_reasoning_models())
+    assert decision.model_name == "claude-sonnet-4.6"
+    assert decision.reason == "default"
+    assert "kimi-k2.7-code" in always_on_reasoning_models()

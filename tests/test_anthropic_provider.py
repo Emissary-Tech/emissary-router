@@ -5,10 +5,136 @@ import asyncio
 from emissary_router.config import ProviderConfig, ResolvedModel
 from emissary_router.providers.anthropic import AnthropicProvider
 from emissary_router.providers.thinking import (
+    SYNTHETIC_THINKING_SIGNATURE,
     max_effort_for_model,
     normalize_anthropic_thinking_for_model,
 )
 from emissary_router.schemas import AnthropicRequest, RequestContext
+
+
+def test_hoist_trailing_system_becomes_positioned_user_reminder() -> None:
+    # Trailing role:system reminders must NOT be hoisted to the top-level system field:
+    # system precedes messages in the prompt, so a changing reminder would rewrite the
+    # prompt head each turn and invalidate the whole prompt-cache prefix. Convert in
+    # place to a user message instead; the top-level system stays byte-stable.
+    body = {
+        "system": [{"type": "text", "text": "main system"}],
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "system", "content": "<system-reminder>be concise</system-reminder>"},
+        ],
+    }
+
+    AnthropicProvider._hoist_system_messages(body)
+
+    assert body["system"] == [{"type": "text", "text": "main system"}]  # head unchanged
+    assert [m["role"] for m in body["messages"]] == ["user", "user"]
+    reminder = body["messages"][1]["content"][0]["text"]
+    assert "be concise" in reminder
+    assert reminder.count("<system-reminder") == 1  # already-wrapped content not re-wrapped
+
+
+def test_hoist_prompt_prefix_is_stable_across_turns_with_new_reminders() -> None:
+    # Cache-prefix regression guard: the top-level system must stay byte-identical and
+    # turn N's converted messages must be an exact prefix of turn N+1's, even when a
+    # NEW per-turn reminder appears. Anthropic hashes tools -> system -> messages, so
+    # any head change would invalidate every cache breakpoint in the conversation.
+    def body(messages):
+        return {"system": [{"type": "text", "text": "main system"}], "messages": list(messages)}
+
+    turn1_msgs = [
+        {"role": "user", "content": "fix the bug"},
+        {"role": "system", "content": "<system-reminder>R1</system-reminder>"},
+    ]
+    turn2_msgs = turn1_msgs + [
+        {"role": "assistant", "content": [{"type": "text", "text": "done"}]},
+        {"role": "user", "content": "now add tests"},
+        {"role": "system", "content": "<system-reminder>R2</system-reminder>"},
+    ]
+    b1, b2 = body(turn1_msgs), body(turn2_msgs)
+    AnthropicProvider._hoist_system_messages(b1)
+    AnthropicProvider._hoist_system_messages(b2)
+
+    assert b1["system"] == b2["system"] == [{"type": "text", "text": "main system"}]
+    assert b2["messages"][: len(b1["messages"])] == b1["messages"]
+
+
+def test_hoist_leading_system_message_moves_into_top_level_system() -> None:
+    body = {
+        "system": "main system",
+        "messages": [
+            {"role": "system", "content": "extra setup"},
+            {"role": "user", "content": "hi"},
+        ],
+    }
+
+    AnthropicProvider._hoist_system_messages(body)
+
+    assert [m["role"] for m in body["messages"]] == ["user"]
+    assert body["system"] == [
+        {"type": "text", "text": "main system"},
+        {"type": "text", "text": "extra setup"},
+    ]
+
+
+def test_hoist_system_messages_noop_when_no_system_role() -> None:
+    import copy
+
+    body = {"system": "s", "messages": [{"role": "user", "content": "hi"}]}
+    before = copy.deepcopy(body)
+    AnthropicProvider._hoist_system_messages(body)
+    assert body == before
+
+
+def test_strip_synthetic_thinking_removes_only_synthetic_blocks() -> None:
+    body = {
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "from glm", "signature": SYNTHETIC_THINKING_SIGNATURE},
+                    {"type": "text", "text": "hello"},
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "native", "signature": "real-anthropic-sig"},
+                    {"type": "text", "text": "world"},
+                ],
+            },
+        ]
+    }
+
+    AnthropicProvider._strip_synthetic_thinking(body)
+
+    assert body["messages"][1]["content"] == [{"type": "text", "text": "hello"}]
+    # a genuine Anthropic thinking block (real signature) is preserved
+    assert body["messages"][2]["content"][0]["type"] == "thinking"
+
+
+def test_strip_synthetic_thinking_drops_all_synthetic_message() -> None:
+    # A reasoning-only GLM/Kimi turn (e.g. max_tokens exhausted while thinking) leaves an
+    # assistant message that is ONLY a synthetic thinking block. It must be dropped
+    # entirely: an empty-text placeholder is rejected by Anthropic ("text content blocks
+    # must be non-empty"), and consecutive user turns are accepted.
+    body = {
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "x", "signature": SYNTHETIC_THINKING_SIGNATURE}
+                ],
+            },
+            {"role": "user", "content": "continue"},
+        ]
+    }
+
+    AnthropicProvider._strip_synthetic_thinking(body)
+
+    assert [m["role"] for m in body["messages"]] == ["user", "user"]
 
 
 def test_anthropic_sse_usage_parses_cache_tokens() -> None:
@@ -139,3 +265,21 @@ def test_anthropic_provider_sanitizes_haiku_adaptive_before_send(monkeypatch) ->
 
     assert captured["json"]["model"] == "claude-haiku-4-5"
     assert captured["json"]["thinking"] == {"type": "enabled", "budget_tokens": 4095}
+
+
+def test_strip_removes_gemini_thought_signature_from_tool_use() -> None:
+    # Anthropic 400s "Extra inputs are not permitted" on unknown tool_use keys
+    # (live-verified); the Gemini signature preserved for gemini->gemini replay must be
+    # stripped when the turn routes back to Anthropic.
+    body = {
+        "messages": [
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "get_weather",
+                 "input": {"city": "Paris"}, "thought_signature": "sig-abc"},
+            ]},
+        ]
+    }
+    AnthropicProvider._strip_synthetic_thinking(body)
+    block = body["messages"][0]["content"][0]
+    assert "thought_signature" not in block
+    assert block["name"] == "get_weather" and block["input"] == {"city": "Paris"}
