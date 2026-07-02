@@ -11,7 +11,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from emissary_router.caching.usage import Usage
 from emissary_router.config import ProviderConfig, ResolvedModel
 from emissary_router.schemas import AnthropicRequest, RequestContext
-from emissary_router.providers.base import ProviderComplete
+from emissary_router.providers.base import ProviderComplete, sanitize_tool_id
 from emissary_router.providers.thinking import (
     SYNTHETIC_THINKING_SIGNATURE,
     accepts_effort_for_model,
@@ -306,7 +306,7 @@ class OpenRouterProvider:
                         "index": next_index,
                         "content_block": {
                             "type": "tool_use",
-                            "id": tool_id or f"toolu_{uuid.uuid4().hex[:24]}",
+                            "id": sanitize_tool_id(tool_id) or f"toolu_{uuid.uuid4().hex[:24]}",
                             "name": name or "unknown_tool",
                             "input": {},
                         },
@@ -508,7 +508,7 @@ class OpenRouterProvider:
             content.append(
                 {
                     "type": "tool_use",
-                    "id": tool_call.get("id") or f"toolu_{uuid.uuid4().hex[:24]}",
+                    "id": sanitize_tool_id(tool_call.get("id")) or f"toolu_{uuid.uuid4().hex[:24]}",
                     "name": fn.get("name") or "unknown_tool",
                     "input": args,
                 }

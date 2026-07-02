@@ -12,6 +12,7 @@ from emissary_router.caching.usage import Usage
 from emissary_router.config import ProviderConfig, ResolvedModel
 from emissary_router.schemas import AnthropicRequest, RequestContext
 from emissary_router.providers.base import ProviderComplete
+from emissary_router.providers.base import sanitize_tool_id
 from emissary_router.providers.thinking import (
     SYNTHETIC_THINKING_SIGNATURE,
     normalize_anthropic_thinking_for_model,
@@ -50,6 +51,26 @@ def _system_text(content) -> str:
             if isinstance(block, dict) and block.get("type") == "text"
         ).strip()
     return ""
+
+
+def _invalid_tool_ids(body: dict) -> list[str]:
+    """Tool ids in the outbound body that violate Anthropic's id pattern — logged on
+    4xx so an id-pattern rejection can be attributed to the exact minting value/turn
+    instead of guessed at."""
+    from emissary_router.providers.base import TOOL_ID_RE
+
+    bad: list[str] = []
+    for message in body.get("messages") or []:
+        if not isinstance(message, dict) or not isinstance(message.get("content"), list):
+            continue
+        for block in message["content"]:
+            if not isinstance(block, dict):
+                continue
+            for key in ("id", "tool_use_id"):
+                value = block.get(key)
+                if isinstance(value, str) and value and not TOOL_ID_RE.fullmatch(value):
+                    bad.append(value)
+    return bad
 
 
 def _request_summary(body: dict) -> str:
@@ -118,9 +139,10 @@ class AnthropicProvider:
                     finally:
                         if status is not None and status >= 400:
                             logger.warning(
-                                "anthropic upstream %s | %s | error_body=%s",
+                                "anthropic upstream %s | %s | bad_tool_ids=%s | error_body=%s",
                                 status,
                                 _request_summary(body),
+                                _invalid_tool_ids(body),
                                 buf.decode("utf-8", "replace")[:800],
                             )
                         self._complete(
@@ -140,9 +162,10 @@ class AnthropicProvider:
             response = await client.post(f"{self._base_url}/v1/messages", headers=headers, json=body)
         if response.status_code >= 400:
             logger.warning(
-                "anthropic upstream %s | %s | error_body=%s",
+                "anthropic upstream %s | %s | bad_tool_ids=%s | error_body=%s",
                 response.status_code,
                 _request_summary(body),
+                _invalid_tool_ids(body),
                 response.text[:800],
             )
         try:
@@ -236,7 +259,10 @@ class AnthropicProvider:
         - thinking blocks bearing our synthetic signature (Anthropic rejects the
           signature as invalid);
         - `thought_signature` keys on tool_use blocks (Gemini's signature, preserved
-          for gemini->gemini replay; Anthropic 400s "Extra inputs are not permitted").
+          for gemini->gemini replay; Anthropic 400s "Extra inputs are not permitted");
+        - tool ids outside Anthropic's `^[a-zA-Z0-9_-]+$` pattern (Kimi emits e.g.
+          "functions.get_weather:0"), sanitized deterministically on BOTH the tool_use
+          id and the matching tool_result tool_use_id so pairing is preserved.
         """
         messages = body.get("messages")
         if not isinstance(messages, list):
@@ -244,31 +270,39 @@ class AnthropicProvider:
         cleaned: list = []
         changed = False
         for message in messages:
-            if not (
-                isinstance(message, dict)
-                and message.get("role") == "assistant"
-                and isinstance(message.get("content"), list)
-            ):
+            if not (isinstance(message, dict) and isinstance(message.get("content"), list)):
                 cleaned.append(message)
                 continue
+            role = message.get("role")
             content = message["content"]
             kept = []
             message_changed = False
             for block in content:
+                if not isinstance(block, dict):
+                    kept.append(block)
+                    continue
                 if (
-                    isinstance(block, dict)
+                    role == "assistant"
                     and block.get("type") == "thinking"
                     and block.get("signature") == SYNTHETIC_THINKING_SIGNATURE
                 ):
                     message_changed = True
                     continue
-                if (
-                    isinstance(block, dict)
-                    and block.get("type") == "tool_use"
-                    and "thought_signature" in block
-                ):
-                    block = {k: v for k, v in block.items() if k != "thought_signature"}
-                    message_changed = True
+                if role == "assistant" and block.get("type") == "tool_use":
+                    new_block = block
+                    if "thought_signature" in new_block:
+                        new_block = {k: v for k, v in new_block.items() if k != "thought_signature"}
+                    fixed = sanitize_tool_id(new_block.get("id"))
+                    if fixed != new_block.get("id"):
+                        new_block = {**new_block, "id": fixed}
+                    if new_block is not block:
+                        block = new_block
+                        message_changed = True
+                if role == "user" and block.get("type") == "tool_result":
+                    fixed = sanitize_tool_id(block.get("tool_use_id"))
+                    if fixed != block.get("tool_use_id"):
+                        block = {**block, "tool_use_id": fixed}
+                        message_changed = True
                 kept.append(block)
             if not message_changed:
                 cleaned.append(message)

@@ -283,3 +283,44 @@ def test_strip_removes_gemini_thought_signature_from_tool_use() -> None:
     block = body["messages"][0]["content"][0]
     assert "thought_signature" not in block
     assert block["name"] == "get_weather" and block["input"] == {"city": "Paris"}
+
+
+def test_sanitize_tool_id_is_deterministic_and_pattern_valid() -> None:
+    import re
+
+    from emissary_router.providers.base import sanitize_tool_id
+
+    # valid ids pass through untouched
+    assert sanitize_tool_id("toolu_abc123") == "toolu_abc123"
+    assert sanitize_tool_id(None) is None
+    # kimi-style id becomes pattern-valid, deterministically
+    bad = "functions.get_weather:0"
+    fixed = sanitize_tool_id(bad)
+    assert re.fullmatch(r"[a-zA-Z0-9_-]+", fixed)
+    assert fixed == sanitize_tool_id(bad)  # same input -> same output, always
+    # near-collisions stay distinct (hash suffix)
+    assert sanitize_tool_id("functions.get_weather.0") != fixed
+
+
+def test_strip_sanitizes_foreign_tool_ids_and_keeps_pairing() -> None:
+    # Kimi emits tool ids like "functions.get_weather:0"; Anthropic 400s on them
+    # (String should match pattern '^[a-zA-Z0-9_-]+$'). Both the tool_use id and the
+    # matching tool_result tool_use_id must map to the SAME sanitized id.
+    from emissary_router.providers.base import sanitize_tool_id
+
+    bad = "functions.get_weather:0"
+    body = {
+        "messages": [
+            {"role": "user", "content": "weather?"},
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": bad, "name": "get_weather", "input": {"city": "Paris"}},
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": bad, "content": "sunny"},
+            ]},
+        ]
+    }
+    AnthropicProvider._strip_synthetic_thinking(body)
+    fixed = sanitize_tool_id(bad)
+    assert body["messages"][1]["content"][0]["id"] == fixed
+    assert body["messages"][2]["content"][0]["tool_use_id"] == fixed  # pairing preserved
