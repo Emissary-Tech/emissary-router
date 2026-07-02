@@ -231,6 +231,13 @@ class AnthropicProvider:
 
     @staticmethod
     def _strip_synthetic_thinking(body: dict) -> None:
+        """Remove residue that other providers' turns leave in the history.
+
+        - thinking blocks bearing our synthetic signature (Anthropic rejects the
+          signature as invalid);
+        - `thought_signature` keys on tool_use blocks (Gemini's signature, preserved
+          for gemini->gemini replay; Anthropic 400s "Extra inputs are not permitted").
+        """
         messages = body.get("messages")
         if not isinstance(messages, list):
             return
@@ -245,16 +252,25 @@ class AnthropicProvider:
                 cleaned.append(message)
                 continue
             content = message["content"]
-            kept = [
-                block
-                for block in content
-                if not (
+            kept = []
+            message_changed = False
+            for block in content:
+                if (
                     isinstance(block, dict)
                     and block.get("type") == "thinking"
                     and block.get("signature") == SYNTHETIC_THINKING_SIGNATURE
-                )
-            ]
-            if len(kept) == len(content):
+                ):
+                    message_changed = True
+                    continue
+                if (
+                    isinstance(block, dict)
+                    and block.get("type") == "tool_use"
+                    and "thought_signature" in block
+                ):
+                    block = {k: v for k, v in block.items() if k != "thought_signature"}
+                    message_changed = True
+                kept.append(block)
+            if not message_changed:
                 cleaned.append(message)
                 continue
             changed = True

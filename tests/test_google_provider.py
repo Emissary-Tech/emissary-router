@@ -174,3 +174,65 @@ def test_google_adaptive_thinking_without_effort_uses_dynamic_budget() -> None:
     gemini3 = GoogleProvider.to_google_request(body, "gemini-3.1-flash-lite")
 
     assert gemini3["generationConfig"]["thinkingConfig"] == {"thinkingBudget": -1}
+
+
+def test_replayed_function_calls_carry_thought_signature() -> None:
+    # Gemini 3 400s on replayed functionCall parts without a thoughtSignature
+    # ("Function call is missing a thought_signature", live-verified). Foreign-model
+    # tool calls get the documented cross-model bypass value; a preserved real
+    # signature is sent back verbatim.
+    from emissary_router.providers.google import DUMMY_THOUGHT_SIGNATURE
+
+    body = {
+        "messages": [
+            {"role": "user", "content": "weather?"},
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "get_weather", "input": {"city": "Paris"}},
+                {"type": "tool_use", "id": "t2", "name": "get_time", "input": {},
+                 "thought_signature": "real-gemini-sig"},
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "sunny"},
+                {"type": "tool_result", "tool_use_id": "t2", "content": "noon"},
+            ]},
+        ]
+    }
+    contents, _ = GoogleProvider._contents_and_system(body)
+    calls = [p for c in contents for p in c["parts"] if "functionCall" in p]
+    assert calls[0]["thoughtSignature"] == DUMMY_THOUGHT_SIGNATURE  # foreign turn
+    assert calls[1]["thoughtSignature"] == "real-gemini-sig"  # preserved native turn
+
+
+def test_from_google_response_preserves_signature_and_surfaces_thought() -> None:
+    payload = {
+        "candidates": [{"content": {"parts": [
+            {"thought": True, "text": "planning the call"},
+            {"functionCall": {"name": "get_weather", "args": {"city": "Paris"}},
+             "thoughtSignature": "sig-abc"},
+        ]}, "finishReason": "STOP"}],
+        "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5},
+    }
+    msg = GoogleProvider.from_google_response(payload, "gemini-3.1-flash-lite")
+    types = [b["type"] for b in msg["content"]]
+    assert types == ["thinking", "tool_use"]
+    assert msg["content"][0]["signature"] == "emissary:non-anthropic-reasoning"
+    assert msg["content"][1]["thought_signature"] == "sig-abc"
+    # buffered SSE replay must handle the thinking block (no KeyError on id/name)
+    sse = b"".join(GoogleProvider.anthropic_sse(msg)).decode()
+    assert '"thinking_delta"' in sse and '"signature_delta"' in sse
+
+
+def test_google_trailing_system_stays_positioned_and_leading_folds() -> None:
+    body = {
+        "system": "main system",
+        "messages": [
+            {"role": "system", "content": "extra setup"},
+            {"role": "user", "content": "hi"},
+            {"role": "system", "content": "<system-reminder>R1</system-reminder>"},
+        ],
+    }
+    contents, system_instruction = GoogleProvider._contents_and_system(body)
+    assert "main system" in system_instruction and "extra setup" in system_instruction
+    assert [c["role"] for c in contents] == ["user", "user"]
+    assert "R1" in contents[1]["parts"][0]["text"]
+    assert contents[1]["parts"][0]["text"].count("<system-reminder") == 1

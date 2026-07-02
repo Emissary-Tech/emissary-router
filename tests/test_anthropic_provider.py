@@ -265,3 +265,21 @@ def test_anthropic_provider_sanitizes_haiku_adaptive_before_send(monkeypatch) ->
 
     assert captured["json"]["model"] == "claude-haiku-4-5"
     assert captured["json"]["thinking"] == {"type": "enabled", "budget_tokens": 4095}
+
+
+def test_strip_removes_gemini_thought_signature_from_tool_use() -> None:
+    # Anthropic 400s "Extra inputs are not permitted" on unknown tool_use keys
+    # (live-verified); the Gemini signature preserved for gemini->gemini replay must be
+    # stripped when the turn routes back to Anthropic.
+    body = {
+        "messages": [
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "get_weather",
+                 "input": {"city": "Paris"}, "thought_signature": "sig-abc"},
+            ]},
+        ]
+    }
+    AnthropicProvider._strip_synthetic_thinking(body)
+    block = body["messages"][0]["content"][0]
+    assert "thought_signature" not in block
+    assert block["name"] == "get_weather" and block["input"] == {"city": "Paris"}
