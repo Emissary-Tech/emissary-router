@@ -17,6 +17,9 @@ DEFAULT_CACHE_TTL_SECONDS = 300
 # Smoothing for the rolling output-length estimate. Small enough to track a session's
 # style, large enough not to swing on a single short/long turn.
 OUTPUT_EMA_ALPHA = 0.2
+# Expired entries are normally popped lazily on predict(); rotated sessions never get
+# re-predicted, so past this many entries observe() sweeps out everything expired.
+_SWEEP_THRESHOLD = 256
 
 
 @dataclass(frozen=True)
@@ -32,7 +35,11 @@ class CacheLedgerEntry:
     cached_tokens: int
     expires_at: float
     confidence: CacheConfidence
-    last_actual_cache_read_tokens: int = 0
+    # BEST_EFFORT gate: has this (session, provider, model, prefix) EVER produced an
+    # actual cache read? Sticky on purpose — a later creation-only turn (provider
+    # re-built part of the cache) is not evidence that same-host routing stopped
+    # holding, and flipping back to unconfirmed made the credit oscillate.
+    read_confirmed: bool = False
 
 
 class CacheLedger:
@@ -58,7 +65,7 @@ class CacheLedger:
             self._entries.pop(key, None)
             return CachePrediction(False, 0, None, "expired")
 
-        if entry.confidence == CacheConfidence.BEST_EFFORT and entry.last_actual_cache_read_tokens <= 0:
+        if entry.confidence == CacheConfidence.BEST_EFFORT and not entry.read_confirmed:
             return CachePrediction(False, 0, entry.confidence.value, "best_effort_unconfirmed")
 
         # entry.cached_tokens is the cache size the provider actually reported last
@@ -80,7 +87,16 @@ class CacheLedger:
         usage: Usage,
         *,
         is_main: bool = True,
+        observed_at: float | None = None,
     ) -> None:
+        """Record a provider response against the ledger.
+
+        ``observed_at`` should be the REQUEST START time: the provider's cache TTL
+        refreshes when the cache is read (early in request processing), not when the
+        response finishes. Anchoring at completion would over-extend the predicted
+        lifetime by the whole streaming duration (minutes on long turns) and predict
+        warm against a cache that has already gone cold. Defaults to now.
+        """
         # Track output length from main (interactive tool-loop) calls only. Background
         # calls — title/summary — emit short outputs that would drag the estimate down
         # and misprice the long main calls cache-aware actually routes. The per-prefix
@@ -116,17 +132,26 @@ class CacheLedger:
             else CacheConfidence.BEST_EFFORT
         )
         existing = self._entries.get(key)
-        cached_tokens = max(
-            observed_tokens,
-            features.estimated_cacheable_prefix_tokens,
-            existing.cached_tokens if existing else 0,
-        )
+        # The LATEST observation is the truth about the provider-side cache; do NOT
+        # ratchet in a previous entry's larger value. After /compact the provider
+        # reports a small write/read for the shrunken prompt — keeping the old 150k
+        # figure would credit a cache that no longer matches this prefix.
+        cached_tokens = max(observed_tokens, features.estimated_cacheable_prefix_tokens)
         self._entries[key] = CacheLedgerEntry(
             cached_tokens=cached_tokens,
-            expires_at=time.time() + self._ttl_seconds,
+            expires_at=(observed_at if observed_at is not None else time.time())
+            + self._ttl_seconds,
             confidence=confidence,
-            last_actual_cache_read_tokens=usage.cache_read_input_tokens,
+            read_confirmed=(existing.read_confirmed if existing else False)
+            or usage.cache_read_input_tokens > 0,
         )
+        if len(self._entries) > _SWEEP_THRESHOLD:
+            now = time.time()
+            self._entries = {
+                entry_key: entry
+                for entry_key, entry in self._entries.items()
+                if entry.expires_at > now
+            }
 
     @staticmethod
     def _key(model: ResolvedModel, features: RequestCostFeatures) -> CacheLedgerKey | None:

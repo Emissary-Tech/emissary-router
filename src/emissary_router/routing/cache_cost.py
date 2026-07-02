@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 from emissary_router.catalog import CATALOG, TokenPricing
-from emissary_router.providers.base import CCH_ATTRIBUTION_LINE_RE
+from emissary_router.providers.base import strip_cch_text
 from emissary_router.config import AppConfig
 
 
@@ -59,22 +59,28 @@ def extract_request_cost_features(
     expected_output_tokens: int | None = None,
 ) -> RequestCostFeatures:
     session_id = _header(headers, "x-claude-code-session-id")
-    prefix_material = _stable_json(
-        {
-            "system": _normalize_system(body.get("system")),
-            "tools": body.get("tools") or [],
-        }
+    # Mirror what providers actually send: LEADING role:"system" messages are hoisted
+    # into the top-level system prompt (see AnthropicProvider._hoist_system_messages and
+    # the OpenRouter/Google system folds), so they are part of the cacheable prefix —
+    # not conversation history. When there are none (the common Claude Code shape) the
+    # prefix material is byte-identical to the pre-split form, keeping prefix_hash
+    # stable for existing sessions.
+    leading_system, conversation = _split_leading_system(body.get("messages") or [])
+    system: Any = _normalize_system(body.get("system"))
+    if leading_system:
+        system = _system_as_blocks(system) + [
+            _normalize_system(message.get("content")) for message in leading_system
+        ]
+    prefix_material = _stable_json({"system": system, "tools": body.get("tools") or []})
+    cacheable_prefix_tokens = _estimate_content_tokens(
+        {"system": system, "tools": body.get("tools") or []}
     )
-    input_material = _stable_json(
-        {
-            "system": _normalize_system(body.get("system")),
-            "tools": body.get("tools") or [],
-            "messages": body.get("messages") or [],
-        }
-    )
-    cacheable_prefix_tokens = _estimate_tokens(prefix_material)
-    input_tokens = max(_estimate_tokens(input_material), cacheable_prefix_tokens)
-    fresh_input_tokens = max(input_tokens - cacheable_prefix_tokens, 0)
+    # Token estimation walks the structured content instead of serializing the whole
+    # body to JSON: base64 image payloads must not count as text (a 1MB screenshot is
+    # ~1.5k provider tokens, not 250k), and skipping the full-body serialization keeps
+    # this off the per-request hot path for 300KB+ conversations.
+    fresh_input_tokens = _estimate_content_tokens(conversation)
+    input_tokens = cacheable_prefix_tokens + fresh_input_tokens
     return RequestCostFeatures(
         session_id=session_id,
         prefix_hash=hashlib.sha256(prefix_material.encode("utf-8")).hexdigest(),
@@ -152,18 +158,37 @@ def _header(headers: dict[str, str], name: str) -> str | None:
 
 def _normalize_system(system: Any) -> Any:
     if isinstance(system, str):
-        return CCH_ATTRIBUTION_LINE_RE.sub("", system)
+        return strip_cch_text(system)
     if isinstance(system, list):
         normalized = []
         for block in system:
             if isinstance(block, dict) and isinstance(block.get("text"), str):
                 updated = dict(block)
-                updated["text"] = CCH_ATTRIBUTION_LINE_RE.sub("", updated["text"])
+                updated["text"] = strip_cch_text(updated["text"])
                 normalized.append(updated)
             else:
                 normalized.append(block)
         return normalized
     return system
+
+
+def _split_leading_system(messages: list) -> tuple[list, list]:
+    """Split off role:"system" messages that precede any user/assistant turn."""
+    leading: list = []
+    for index, message in enumerate(messages):
+        if isinstance(message, dict) and message.get("role") == "system":
+            leading.append(message)
+            continue
+        return leading, messages[index:]
+    return leading, []
+
+
+def _system_as_blocks(system: Any) -> list:
+    if isinstance(system, str):
+        return [{"type": "text", "text": system}] if system else []
+    if isinstance(system, list):
+        return list(system)
+    return []
 
 
 def _stable_json(value: Any) -> str:
@@ -172,6 +197,37 @@ def _stable_json(value: Any) -> str:
 
 def _estimate_tokens(text: str) -> int:
     return max(1, (len(text) + 3) // 4)
+
+
+# One image costs the provider ~(width*height)/750 tokens, capped around ~1.6k at
+# Anthropic's max size. The base64 payload length says almost nothing about that,
+# so every base64 source counts flat instead of as text.
+_BASE64_SOURCE_TOKENS = 1600
+
+
+def _estimate_content_tokens(value: Any) -> int:
+    """Estimate tokens over structured request content without JSON-serializing it.
+
+    Strings count at ~4 chars/token (dict keys too, which also approximates the JSON
+    punctuation overhead the previous serialize-then-count estimate included). Base64
+    image/document sources count flat — they decode to pixels, and counting a 1MB data
+    URL as ~250k text tokens made a single screenshot look more expensive than the
+    warm-cache credit, busting the cache with a pointless deviation.
+    """
+    if isinstance(value, str):
+        return _estimate_tokens(value)
+    if isinstance(value, dict):
+        if value.get("type") == "base64" and isinstance(value.get("data"), str):
+            return _BASE64_SOURCE_TOKENS
+        total = 0
+        for key, item in value.items():
+            if isinstance(key, str):
+                total += _estimate_tokens(key)
+            total += _estimate_content_tokens(item)
+        return total
+    if isinstance(value, list):
+        return sum(_estimate_content_tokens(item) for item in value)
+    return 1
 
 
 def _expected_output_tokens(body: dict[str, Any], rolling: int | None = None) -> int:

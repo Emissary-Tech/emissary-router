@@ -279,6 +279,38 @@ def test_cache_aware_keeps_warm_default_when_history_dominates_prefix() -> None:
     assert decision.estimated_costs["claude-sonnet-4.6"]["cache_read_tokens"] == 67000
 
 
+def test_cache_aware_labels_cold_stay_as_default_not_beaten() -> None:
+    # No cache in play (empty ledger) and the confident candidate is more expensive
+    # than the default for this request: the stay is a plain price call, and must not
+    # be mislabeled "warm_default_cheaper" in telemetry.
+    config = AppConfig.model_validate(
+        {
+            "models": {
+                "gemini-3.1-flash-lite": True,
+                "claude-haiku-4.5": True,
+                "claude-sonnet-4.6": True,
+            },
+            "default": "gemini-3.1-flash-lite",
+            "confidence": 0.8,
+        }
+    )
+
+    decision = choose_model(
+        config,
+        {
+            "claude-sonnet-4.6": 0.95,  # confident but pricier than the default
+            "claude-haiku-4.5": 0.1,
+            "gemini-3.1-flash-lite": 0.1,
+        },
+        cost_features=_features(),
+        cache_ledger=CacheLedger(),
+    )
+
+    assert decision.model_name == "gemini-3.1-flash-lite"
+    assert decision.reason == "cache_aware:default_not_beaten"
+    assert decision.cache_prediction["warm"] is False
+
+
 def test_cache_aware_uses_any_positive_savings_without_margin() -> None:
     baseline = _estimated("claude-sonnet-4.6", total_usd=1.0)
     candidate = _estimated("claude-haiku-4.5", total_usd=0.999999)

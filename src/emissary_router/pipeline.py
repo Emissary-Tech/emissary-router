@@ -122,8 +122,14 @@ class RouterPipeline:
         )
 
         def on_complete(usage: Usage, provider_metadata: dict) -> None:
+            # observed_at = request start: the provider refreshed its cache TTL when it
+            # READ the cache (start of processing), not when the stream finished.
             self._cache_ledger.observe(
-                model, cost_features, usage, is_main=(call_kind == "main")
+                model,
+                cost_features,
+                usage,
+                is_main=(call_kind == "main"),
+                observed_at=started_at,
             )
             record = EventRecord(
                 id=request_id,

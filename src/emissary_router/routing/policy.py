@@ -23,8 +23,9 @@ def choose_model(
     cache-adjusted per-request cost — a warm model is credited its observed cache
     reads, switching is priced at full input plus a cache write. Where there is no
     cache signal (cold start, providers without usable cache reporting) the estimates
-    carry no discount and the comparison reduces to plain price order, so routing is
-    never worse than price-ordered.
+    carry no discount and the comparison is a flat per-request price comparison for
+    THIS request's input/output shape (which can order models differently than the
+    blended catalog cost_score used by the price-ordered fallback).
 
     `skip_models` are never deviated to (e.g. always-on-reasoning models on a
     background call); if the default itself is skipped, the cheapest usable model
@@ -105,17 +106,19 @@ def _cache_aware(
     best = min(estimates.values(), key=lambda estimate: estimate.total_usd)
     default_estimate = estimates.get(config.default)
 
-    if default_estimate is not None and (
-        best.model_name == config.default or not is_cheaper(best, default_estimate)
-    ):
+    # `is_cheaper` is strict, so when best IS the default this is always a stay.
+    if default_estimate is not None and not is_cheaper(best, default_estimate):
         # Stayed on default. Distinguish *why* so the cause is visible in telemetry:
         #   no_confident_candidate — no non-default model cleared `confidence`
-        #   warm_default_cheaper   — a confident candidate existed but default won after cache
-        stayed_reason = (
-            "cache_aware:no_confident_candidate"
-            if len(candidates) == 1
-            else "cache_aware:warm_default_cheaper"
-        )
+        #   warm_default_cheaper   — the default's warm cache beat a confident candidate
+        #   default_not_beaten     — no cache in play; the default was simply not more
+        #                            expensive than the candidates for this request
+        if len(candidates) == 1:
+            stayed_reason = "cache_aware:no_confident_candidate"
+        elif default_estimate.cache_prediction.warm:
+            stayed_reason = "cache_aware:warm_default_cheaper"
+        else:
+            stayed_reason = "cache_aware:default_not_beaten"
         return RouteDecision(
             model_name=config.default,
             reason=stayed_reason,

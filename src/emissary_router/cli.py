@@ -127,7 +127,6 @@ def _cmd_validate_config(args: argparse.Namespace) -> int:
         "config": str(config_path.expanduser()),
         "default": config.default,
         "confidence": config.confidence,
-        "policy": config.policy,
         "enabled_models": config.enabled_models(),
         "required_provider_env": config.required_provider_env(),
         "missing_env": missing_env,
