@@ -27,7 +27,6 @@ This is the full shipped config. Everything not shown uses defaults.
   },
   "default": "claude-sonnet-4.6",
   "confidence": 0.8,
-  "policy": "deviate_if_confident",
   "router": { "router_model": "emissary-model-router-shared" },
   "server": { "port": 8788 },
   "telemetry": { "enabled": true, "retention_days": 30, "max_events": 50000 }
@@ -115,16 +114,14 @@ ever save cost.
 
 ### `confidence`
 
-Float in `[0, 1]`, default `0.8`. The router scans enabled models cheap → expensive
-and picks the first whose classifier probability is `>= confidence`; if none qualify,
-it uses `default`. Higher `confidence` = more conservative (stays on `default` more
-often). See [routing](#routing).
+Float in `[0, 1]`, default `0.8`. Non-default models must meet this classifier
+probability before the router is allowed to consider them. Higher `confidence` = more
+conservative (stays on `default` more often). See [routing](#routing).
 
-### `policy`
+### `policy` (deprecated)
 
-The routing policy. Currently `deviate_if_confident` is the only value (the default),
-which uses `default` + `confidence` as described under [routing](#routing). The field
-is explicit so the active policy is visible and can be extended later.
+Older configs may contain a `policy` field; it is accepted and ignored. Routing is
+cache-aware by default — see [Routing](#routing) — so there is no policy to choose.
 
 ### `router`
 
@@ -160,11 +157,32 @@ also disables the [dashboard](dashboard.md).
 
 ## Routing
 
-The single policy is `deviate_if_confident`: stay on `default`, and drop to the
-cheapest enabled model the classifier is confident about.
+Routing is confidence-gated and cache-aware by default:
 
-- No enabled model meets `confidence` → `default`.
-- A cheaper enabled model meets it → that model (a "deviation").
+1. Non-default models must clear `confidence` to be considered at all.
+2. The default plus every confident candidate are compared by **cache-adjusted
+   per-request cost**: a model that is still warm for the session is credited its
+   observed cache reads (the cheap cache-read rate), while switching to a cold model is
+   priced at full input plus a cache write. The cheapest wins; the default stays unless
+   a candidate is strictly cheaper *after* cache effects.
+
+Context limits are deliberately not a routing input: a request that exceeds the
+served model's window surfaces as a normalized `prompt is too long` 400 and the
+client's own context management (compaction) takes over — see
+[providers and caching](providers-caching.md#context-windows-and-long-conversations).
+
+Cache awareness is not a mode. Wherever there is no cache signal — cold start, or a
+provider whose caching is opportunistic (see
+[providers and caching](providers-caching.md)) — the estimates simply carry no
+discount and the comparison is a flat per-request price comparison for the request's
+input/output shape. Switching models always starts cold on the new model, and that
+cost is exactly what the comparison accounts for.
+
+The cache ledger behind this lives in memory in the gateway process; it is not shared
+or persisted, and resets on restart (it re-warms within a turn). The default
+`er start` / `er code` launch runs a single process, which is what the ledger expects.
+Anthropic cache behavior is tracked directly (`predictable`); OpenRouter implicit
+caching is credited only after an observed cache read (`best_effort`).
 
 ## API keys
 

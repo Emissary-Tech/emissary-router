@@ -9,6 +9,7 @@ from emissary_router.caching.usage import Usage
 from emissary_router.cli import _warn_missing_env
 from emissary_router.config import AppConfig
 from emissary_router.pipeline import RouterPipeline
+from emissary_router.routing.cache_cost import extract_request_cost_features
 from emissary_router.telemetry import SqliteStore
 
 
@@ -24,6 +25,15 @@ class _PartialClassifier:
 
     async def predict(self, _input):
         return {"claude-sonnet-4.6": 0.9}  # missing gemini-3.1-flash-lite
+
+
+class _ConfidentHaikuClassifier:
+    async def predict(self, _input):
+        return {
+            "claude-sonnet-4.6": 0.1,
+            "claude-haiku-4.5": 0.95,
+            "gemini-3.1-flash-lite": 0.1,
+        }
 
 
 class _FakeProvider:
@@ -42,6 +52,19 @@ def _config():
     return AppConfig.model_validate(
         {
             "models": {"claude-sonnet-4.6": True, "gemini-3.1-flash-lite": True},
+            "default": "claude-sonnet-4.6",
+        }
+    )
+
+
+def _config_with_haiku():
+    return AppConfig.model_validate(
+        {
+            "models": {
+                "claude-sonnet-4.6": True,
+                "claude-haiku-4.5": True,
+                "gemini-3.1-flash-lite": False,
+            },
             "default": "claude-sonnet-4.6",
         }
     )
@@ -89,6 +112,35 @@ def test_missing_labels_still_502_and_recorded(tmp_path):
     assert len(rows) == 1
     assert rows[0]["served_model"] == "(routing error)"
     assert rows[0]["http_status"] == 502
+
+
+def test_pipeline_passes_cache_state_to_routing(tmp_path):
+    store = SqliteStore(tmp_path / "e.sqlite3")
+    config = _config_with_haiku()
+    pipe = RouterPipeline(config, store=store)
+    pipe._classifier = _ConfidentHaikuClassifier()
+    fake = _FakeProvider()
+    pipe._providers = {"anthropic": fake}
+    body = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "system": "x" * 120000,
+        "max_tokens": 1,
+    }
+    headers = {"x-claude-code-session-id": "s1"}
+    features = extract_request_cost_features(body, headers)
+    pipe._cache_ledger.observe(
+        config.resolve_model("claude-sonnet-4.6"),
+        features,
+        Usage(cache_creation_input_tokens=30000),
+    )
+
+    resp = asyncio.run(pipe.handle_messages(body, headers))
+
+    assert resp.status_code == 200
+    assert [m.name for m in fake.calls] == ["claude-sonnet-4.6"]
+    rows = store.list_events()
+    # Haiku was confident, but the warm sonnet cache made the default cheaper after cache.
+    assert rows[0]["route_reason"] == "cache_aware:warm_default_cheaper"
 
 
 def test_warn_missing_env_is_provider_aware(capsys, monkeypatch):

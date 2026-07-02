@@ -95,7 +95,14 @@ Built-in models:
 
 Set `enabled: false` to drop a model, and `provider` to choose how it's served.
 Users cannot add arbitrary upstream models in V1; model id and pricing are owned by
-the built-in catalog. See [Configuration](docs/configuration.md) for details.
+the built-in catalog.
+
+Routing is confidence-gated and **cache-aware by default**: candidates the classifier
+is confident about are compared by cache-adjusted cost, so the router only switches
+models when it is genuinely cheaper after accounting for the prompt cache it would
+give up (naive per-request switching can cost *more* than not routing at all). Where a
+provider has no reliable cache signal this simply reduces to price-ordered routing.
+See [Configuration](docs/configuration.md) for details.
 
 ## Docs
 

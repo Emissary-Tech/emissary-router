@@ -503,3 +503,113 @@ def test_openrouter_stream_records_usage_before_trailing_events() -> None:
 
     sink = asyncio.run(run())
     assert sink["usage"]["prompt_tokens"] == 40  # recorded the moment it arrived
+
+
+def test_openrouter_strips_cch_attribution_from_system() -> None:
+    # The dynamic cch= line changes per request; left in, it busts the provider's
+    # prefix cache AND diverges from the ledger's prefix_hash (which is computed on the
+    # stripped system). The OpenRouter path must strip it like the Anthropic path does.
+    from emissary_router.routing.cache_cost import extract_request_cost_features
+
+    body = {
+        "system": "stable prefix\nClaude Code attribution cch=abc123\nmore prefix",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    msgs = OpenRouterProvider._messages(body)
+    assert "cch=" not in msgs[0]["content"]
+    assert "stable prefix" in msgs[0]["content"] and "more prefix" in msgs[0]["content"]
+
+    # hash/sender consistency: two requests differing only in the cch value produce the
+    # SAME prefix_hash and the SAME outbound system text
+    body2 = {**body, "system": body["system"].replace("cch=abc123", "cch=zzz999")}
+    f1 = extract_request_cost_features(body, {})
+    f2 = extract_request_cost_features(body2, {})
+    assert f1.prefix_hash == f2.prefix_hash
+    assert OpenRouterProvider._messages(body2)[0]["content"] == msgs[0]["content"]
+
+
+# --- context-overflow error translation (Claude Code self-recovery depends on it) ---
+
+
+def test_overflow_error_translated_to_anthropic_shape() -> None:
+    from emissary_router.providers.openrouter import anthropic_error_payload
+
+    # Exact body OpenRouter returns when the request exceeds the endpoint's window
+    # (captured live; identical shape for kimi and anthropic models via OpenRouter).
+    payload = {
+        "error": {
+            "message": (
+                "This endpoint's maximum context length is 262144 tokens. However, "
+                "you requested about 297572 tokens (297508 of text input, 64 in the "
+                "output). Please reduce the length of either one, or use the "
+                "context-compression plugin to compress your prompt automatically."
+            ),
+            "code": 400,
+            "metadata": {"provider_name": None},
+        }
+    }
+
+    translated = anthropic_error_payload(payload)
+
+    # Claude Code only triggers its automatic context recovery (truncate old tool
+    # results + retry) on Anthropic's "prompt is too long" invalid_request_error.
+    assert translated["type"] == "error"
+    assert translated["error"]["type"] == "invalid_request_error"
+    assert translated["error"]["message"] == "prompt is too long: 297572 tokens > 262144 maximum"
+
+
+def test_overflow_translation_reads_anthropic_raw_in_metadata() -> None:
+    from emissary_router.providers.openrouter import anthropic_error_payload
+
+    payload = {
+        "error": {
+            "message": "Provider returned error",
+            "code": 400,
+            "metadata": {
+                "raw": '{"type":"error","error":{"type":"invalid_request_error",'
+                '"message":"prompt is too long: 228501 tokens > 200000 maximum"}}',
+                "provider_name": "Anthropic",
+            },
+        }
+    }
+
+    translated = anthropic_error_payload(payload)
+    assert translated["error"]["message"] == "prompt is too long: 228501 tokens > 200000 maximum"
+    assert translated["error"]["type"] == "invalid_request_error"
+
+
+def test_non_overflow_errors_pass_through_unchanged() -> None:
+    from emissary_router.providers.openrouter import anthropic_error_payload
+
+    payload = {
+        "error": {
+            "message": "Invalid schema for function 'Read': required is not of type array",
+            "code": 400,
+        }
+    }
+
+    assert anthropic_error_payload(payload) is payload
+
+
+def test_xhigh_effort_maps_per_openrouter_model() -> None:
+    # Sonnet 5-era Claude Code body with the new xhigh effort level.
+    def body() -> dict:
+        return {
+            "max_tokens": 64000,
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "xhigh"},
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+
+    # glm / kimi support xhigh -> passes through unchanged.
+    assert OpenRouterProvider._reasoning(body(), "glm-5.2") == {"effort": "xhigh"}
+    assert OpenRouterProvider._reasoning(body(), "kimi-k2.7-code") == {"effort": "xhigh"}
+    # gemini flash-lite tops out at high -> clamped.
+    assert OpenRouterProvider._reasoning(body(), "gemini-3.1-flash-lite") == {"effort": "high"}
+
+    # Anthropic's "max" is not an OpenRouter wire value -> translated to xhigh
+    # where supported, clamped to high otherwise.
+    max_body = body()
+    max_body["output_config"]["effort"] = "max"
+    assert OpenRouterProvider._reasoning(max_body, "glm-5.2") == {"effort": "xhigh"}
+    assert OpenRouterProvider._reasoning(max_body, "gemini-3.1-flash-lite") == {"effort": "high"}

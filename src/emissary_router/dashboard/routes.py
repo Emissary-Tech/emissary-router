@@ -92,7 +92,11 @@ def build_dashboard_router(
                 }
             )
         return JSONResponse(
-            {"default": cfg.default, "confidence": cfg.confidence, "models": models}
+            {
+                "default": cfg.default,
+                "confidence": cfg.confidence,
+                "models": models,
+            }
         )
 
     @router.put("/api/config")

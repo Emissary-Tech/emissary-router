@@ -3,13 +3,13 @@
 Each catalog model is bound to a provider. Provider and upstream model id are owned
 by the catalog, not your config.
 
-| Model | Provider | Upstream model id |
-|---|---|---|
-| `claude-sonnet-4.6` | Anthropic | `claude-sonnet-4-6` |
-| `claude-haiku-4.5` | Anthropic | `claude-haiku-4-5` |
-| `gemini-3.1-flash-lite` | OpenRouter | `google/gemini-3.1-flash-lite` |
-| `glm-5.2` | OpenRouter | `z-ai/glm-5.2` |
-| `kimi-k2.7-code` | OpenRouter | `moonshotai/kimi-k2.7-code` |
+| Model | Provider | Upstream model id | Context window |
+|---|---|---|---|
+| `claude-sonnet-4.6` | Anthropic | `claude-sonnet-4-6` | 200K (1M with the `context-1m` beta) |
+| `claude-haiku-4.5` | Anthropic | `claude-haiku-4-5` | 200K |
+| `gemini-3.1-flash-lite` | OpenRouter | `google/gemini-3.1-flash-lite` | 1M |
+| `glm-5.2` | OpenRouter | `z-ai/glm-5.2` | 1M |
+| `kimi-k2.7-code` | OpenRouter | `moonshotai/kimi-k2.7-code` | 256K |
 
 Provider API keys come from the environment (`ANTHROPIC_API_KEY`,
 `OPENROUTER_API_KEY`), loaded from `~/.emissary-router/.env` if present. Only the
@@ -34,21 +34,83 @@ instead of buffering until the end. Upstream errors before any bytes are sent re
 their real HTTP status; mid-stream failures emit a terminal SSE `error` event.
 Anthropic requests were always a raw streaming passthrough.
 
+## Context windows and long conversations
+
+Claude Code decides when to auto-compact from the window of the model it *believes*
+it is talking to (the one in `/model`), using the usage numbers the router passes
+through. With the default 200K budget this is safe with the catalog above: every
+routable model has a 200K+ window, so Claude Code compacts before any of them can
+overflow.
+
+⚠️ The case to know about is **1M mode** (`context-1m` beta on Sonnet). Claude Code
+then lets the conversation grow far past 200K — beyond what `claude-haiku-4.5` (200K)
+or `kimi-k2.7-code` (256K) can hold. The router deliberately does **not** reroute
+around this: the conversation belongs to the client, and shrinking it is the
+client's decision, not something the router should do silently from its own size
+estimates. A request routed to a model that can't hold it comes back as that
+provider's 400 (visible as a 400 row in the dashboard), normalized so the client's
+own context management takes over.
+
+What that looks like for the user (verified against a real Claude Code 2.1.198
+session with an injected overflow 400):
+
+- **Usually invisible.** Claude Code handles the 400 on its own: it truncates old
+  tool results (microcompact), re-reads files it still needs, and retries — the turn
+  completed a few seconds later with no banner and no lost input. The retry enters
+  routing as a normal request.
+- **Worst case** (recovery attempts keep failing): Claude Code stops with
+  `Context limit reached · /compact or /clear to continue`. Running `/compact`
+  summarizes and the session continues; the message you had queued is preserved.
+  After any compact the conversation is small again and every model is back in play.
+
+This self-recovery only triggers on Anthropic's `prompt is too long` error shape.
+OpenRouter reports the same condition in an OpenAI shape ("This endpoint's maximum
+context length is ..."), which Claude Code treats as a generic API error and
+abandons the turn (verified live). The router therefore normalizes OpenRouter
+context-overflow 400s into the Anthropic shape before returning them, so the
+recovery works the same no matter which provider or model served the request; the
+original OpenRouter error is still logged.
+
+If you run 1M mode routinely, expect occasional overflow 400 rows for the sub-1M
+models (`claude-haiku-4.5` / `kimi-k2.7-code`) as Claude Code trims and retries — or
+disable those models for such sessions.
+
 ## Caching
 
 There is no generic cache switch — caching works differently per provider, and the
 router preserves each provider's native mechanism rather than managing caches itself.
 
 - Anthropic: Claude Code's `cache_control` blocks pass through unchanged. The router
-  removes the dynamic `cch=` attribution line by default
-  (`strip_dynamic_attribution`) so the prompt prefix stays byte-stable and the
-  provider's prefix cache keeps hitting.
+  strips the legacy dynamic `cch=` attribution line on every provider path so the
+  prompt prefix stays byte-stable (current Claude Code no longer sends it; the strip
+  protects sessions from older clients).
 - OpenRouter: Claude models use OpenRouter/Anthropic cache accounting where
   available; Gemini, GLM, and Kimi use implicit (automatic) caching.
 - Native Google: explicit `CachedContent` lifecycle management is out of scope in V1.
 
 Cache reads/writes are recorded in [telemetry](telemetry.md) when the provider
 reports them.
+
+### Cache support by provider and model
+
+| Model | anthropic | openrouter |
+|---|---|---|
+| `claude-sonnet-4.6` | ✅ explicit prompt cache | ✅ Anthropic cache accounting via OpenRouter |
+| `claude-haiku-4.5` | ✅ explicit prompt cache | ✅ Anthropic cache accounting via OpenRouter |
+| `gemini-3.1-flash-lite` | — | ⚠️ implicit, per-host |
+| `glm-5.2` | — | ⚠️ implicit, per-host |
+| `kimi-k2.7-code` | — | ⚠️ implicit, per-host |
+
+- ✅ — deterministic caching: `cache_control` breakpoints pass through and cache
+  reads/writes are reported reliably, so the router can trust them for its cost
+  estimates (`predictable` tier).
+- ⚠️ — implicit (automatic) caching with **per-host** caches behind OpenRouter's load
+  balancer: a hit needs the request to re-land on a host that recently served the same
+  prefix, so hits are opportunistic rather than guaranteed. The router only credits
+  these caches after an *observed* hit (`best_effort` tier) and never assumes one.
+- Universally: a cache never carries across providers or models — switching the served
+  model always starts cold on the new one. The router prices exactly that when it
+  decides whether switching is worth it.
 
 ### Implicit caching on OpenRouter (gemini / glm / kimi)
 

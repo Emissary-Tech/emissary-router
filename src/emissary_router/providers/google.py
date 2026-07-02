@@ -12,7 +12,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from emissary_router.caching.usage import Usage
 from emissary_router.config import ProviderConfig, ResolvedModel
 from emissary_router.schemas import AnthropicRequest, RequestContext
-from emissary_router.providers.base import ProviderComplete, sanitize_tool_id
+from emissary_router.providers.base import ProviderComplete, sanitize_tool_id, strip_cch_text
 from emissary_router.providers.thinking import (
     SYNTHETIC_THINKING_SIGNATURE,
     effort_reasoning_for_model,
@@ -306,7 +306,7 @@ class GoogleProvider:
     @classmethod
     def _contents_and_system(cls, body: dict) -> tuple[list[dict[str, Any]], str]:
         system_parts: list[str] = []
-        top_system = cls._stringify(body.get("system", ""))
+        top_system = strip_cch_text(cls._stringify(body.get("system", "")))
         if top_system:
             system_parts.append(top_system)
         tool_names_by_id: dict[str, str] = {}
@@ -321,7 +321,7 @@ class GoogleProvider:
                 # join the system instruction; mid/trailing ones are per-turn reminders
                 # and stay at their position (as user text) so the prompt head — and
                 # with it the provider's prefix cache — stays byte-stable.
-                inline = cls._stringify(message.get("content"))
+                inline = strip_cch_text(cls._stringify(message.get("content")))
                 if not inline:
                     continue
                 if leading:

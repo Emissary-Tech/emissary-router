@@ -324,3 +324,34 @@ def test_strip_sanitizes_foreign_tool_ids_and_keeps_pairing() -> None:
     fixed = sanitize_tool_id(bad)
     assert body["messages"][1]["content"][0]["id"] == fixed
     assert body["messages"][2]["content"][0]["tool_use_id"] == fixed  # pairing preserved
+
+
+# --- Sonnet 5-era xhigh effort: served Claude models must get a level they accept ---
+
+
+def test_xhigh_effort_clamps_to_max_for_sonnet_and_drops_for_haiku() -> None:
+    from emissary_router.providers.thinking import normalize_anthropic_thinking_for_model
+
+    def sonnet5_body() -> dict:
+        # Exact Claude Code 2.1.198+ shape when the user selects xhigh on Sonnet 5.
+        return {
+            "model": "claude-sonnet-5",
+            "max_tokens": 64000,
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "xhigh"},
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+
+    # sonnet-4.6 rejects xhigh outright (live 400: "This model does not support
+    # effort level 'xhigh'. Supported levels: high, low, max, medium") -> clamp to max.
+    body = sonnet5_body()
+    changes = normalize_anthropic_thinking_for_model(body, "claude-sonnet-4.6")
+    assert body["output_config"]["effort"] == "max"
+    assert body["thinking"] == {"type": "adaptive"}  # adaptive is supported; keep it
+    assert "output_config.effort=xhigh->max" in changes
+
+    # haiku accepts neither adaptive nor effort -> budget conversion + drop.
+    body = sonnet5_body()
+    normalize_anthropic_thinking_for_model(body, "claude-haiku-4.5")
+    assert body["thinking"] == {"type": "enabled", "budget_tokens": 63999}
+    assert "effort" not in body["output_config"]

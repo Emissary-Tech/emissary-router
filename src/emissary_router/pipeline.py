@@ -8,6 +8,7 @@ import uuid
 import httpx
 from starlette.responses import JSONResponse, Response
 
+from emissary_router.caching.ledger import CacheLedger
 from emissary_router.caching.usage import Usage
 from emissary_router.catalog import CATALOG, PROVIDER_ENV, TokenPricing
 from emissary_router.config import AppConfig, ProviderConfig
@@ -15,6 +16,7 @@ from emissary_router.schemas import AnthropicRequest, RequestContext, RouteDecis
 from emissary_router.providers.registry import build_provider
 from emissary_router.routing.classifier import ClassifierClient
 from emissary_router.providers.thinking import always_on_reasoning_models
+from emissary_router.routing.cache_cost import extract_request_cost_features
 from emissary_router.routing.policy import choose_model
 from emissary_router.routing.request_to_classifier_input import request_to_classifier_input
 from emissary_router.telemetry import (
@@ -34,11 +36,21 @@ class RouterPipeline:
         self,
         config: AppConfig,
         store: SqliteStore | None = None,
+        cache_ledger: CacheLedger | None = None,
     ):
         self._config = config
         self._classifier = ClassifierClient(config.router)
         self._providers = self._build_providers()
+        # Reuse an existing ledger across hot-reloads so dashboard config edits don't
+        # wipe warm-cache state. Entries are keyed by (session, provider, model_id,
+        # prefix) and TTL-expire, so carrying them over is always safe: entries for a
+        # model/provider that just changed simply never match and age out.
+        self._cache_ledger = cache_ledger or CacheLedger()
         self._store = store
+
+    @property
+    def cache_ledger(self) -> CacheLedger:
+        return self._cache_ledger
 
     def _build_providers(self):
         provider_names = {
@@ -59,6 +71,9 @@ class RouterPipeline:
         session_id = _header(headers, SESSION_HEADER)
         call_kind = call_kind_from_body(body)
         classifier_input, classifier_input_metadata = request_to_classifier_input(body)
+        cost_features = extract_request_cost_features(
+            body, headers, self._cache_ledger.expected_output_tokens()
+        )
 
         # When the router classifier is unreachable (retries already exhausted in
         # ClassifierClient) or returns an unparseable response, fall back to the
@@ -89,7 +104,13 @@ class RouterPipeline:
             # them to always-on-reasoning models that can't honor that (and that reason
             # on a utility call, wasting cost/latency).
             skip = always_on_reasoning_models() if call_kind == "background" else frozenset()
-            decision = choose_model(self._config, probabilities, skip_models=skip)
+            decision = choose_model(
+                self._config,
+                probabilities,
+                skip_models=skip,
+                cost_features=cost_features,
+                cache_ledger=self._cache_ledger,
+            )
         model = self._config.resolve_model(decision.model_name)
         provider = self._providers[model.provider]
 
@@ -101,6 +122,15 @@ class RouterPipeline:
         )
 
         def on_complete(usage: Usage, provider_metadata: dict) -> None:
+            # observed_at = request start: the provider refreshed its cache TTL when it
+            # READ the cache (start of processing), not when the stream finished.
+            self._cache_ledger.observe(
+                model,
+                cost_features,
+                usage,
+                is_main=(call_kind == "main"),
+                observed_at=started_at,
+            )
             record = EventRecord(
                 id=request_id,
                 ts=time.time(),

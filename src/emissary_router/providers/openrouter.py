@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from typing import Any
 
@@ -11,7 +12,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from emissary_router.caching.usage import Usage
 from emissary_router.config import ProviderConfig, ResolvedModel
 from emissary_router.schemas import AnthropicRequest, RequestContext
-from emissary_router.providers.base import ProviderComplete, sanitize_tool_id
+from emissary_router.providers.base import ProviderComplete, sanitize_tool_id, strip_cch_text
 from emissary_router.providers.thinking import (
     SYNTHETIC_THINKING_SIGNATURE,
     accepts_effort_for_model,
@@ -24,6 +25,48 @@ from emissary_router.providers.thinking import (
 
 
 logger = logging.getLogger(__name__)
+
+
+# OpenRouter's own context validation: "This endpoint's maximum context length is
+# 262144 tokens. However, you requested about 297572 tokens (...)".
+_OVERFLOW_OPENROUTER_NUMBERS_RE = re.compile(
+    r"maximum context length is (\d+) tokens.*?requested about (\d+) tokens", re.S
+)
+# Anthropic's native phrasing, e.g. forwarded raw inside OpenRouter error metadata.
+_OVERFLOW_ANTHROPIC_NUMBERS_RE = re.compile(r"prompt is too long: (\d+) tokens > (\d+) maximum")
+_OVERFLOW_HINT_RE = re.compile(
+    r"maximum context length|prompt is too long|context length exceeded"
+    r"|exceeds the (?:model'?s )?context",
+    re.I,
+)
+
+
+def anthropic_error_payload(payload: Any) -> Any:
+    """Rewrite context-overflow error bodies into Anthropic's error shape.
+
+    Claude Code special-cases Anthropic's `prompt is too long` invalid_request_error:
+    it truncates old tool results and retries the turn on its own (verified against a
+    live 2.1.198 session). OpenRouter reports the same condition in an OpenAI shape
+    ("This endpoint's maximum context length is ..."), which Claude Code treats as a
+    generic API error and abandons the turn. Translating restores the self-recovery
+    path regardless of which provider served the session; every other error passes
+    through unchanged.
+    """
+    text = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
+    if not _OVERFLOW_HINT_RE.search(text):
+        return payload
+    if match := _OVERFLOW_OPENROUTER_NUMBERS_RE.search(text):
+        maximum, requested = match.group(1), match.group(2)
+    elif match := _OVERFLOW_ANTHROPIC_NUMBERS_RE.search(text):
+        requested, maximum = match.group(1), match.group(2)
+    else:
+        requested = maximum = None
+    message = (
+        f"prompt is too long: {requested} tokens > {maximum} maximum"
+        if requested
+        else "prompt is too long: the request exceeds the served model's context window"
+    )
+    return {"type": "error", "error": {"type": "invalid_request_error", "message": message}}
 
 
 def _reasoning_text(obj: dict[str, Any]) -> str:
@@ -127,6 +170,8 @@ class OpenRouterProvider:
         )
 
         if response.status_code >= 400:
+            if response.status_code == 400:
+                payload = anthropic_error_payload(payload)
             return JSONResponse(payload, status_code=response.status_code)
 
         message = self.from_openai_response(payload, model.name)
@@ -177,6 +222,8 @@ class OpenRouterProvider:
                 payload = json.loads(text)
             except ValueError:
                 payload = {"error": {"type": "api_error", "message": (text or "upstream error")[:300]}}
+            if status == 400:
+                payload = anthropic_error_payload(payload)
             return JSONResponse(payload, status_code=status)
 
         return StreamingResponse(
@@ -540,7 +587,7 @@ class OpenRouterProvider:
         messages: list[dict[str, Any]] = []
         body_messages: list[dict[str, Any]] = []
         system_parts: list[str] = []
-        top_system = cls._stringify(body.get("system"))
+        top_system = strip_cch_text(cls._stringify(body.get("system")))
         if top_system:
             system_parts.append(top_system)
 
@@ -548,7 +595,7 @@ class OpenRouterProvider:
         for message in body.get("messages", []) or []:
             role = message.get("role")
             if role == "system":
-                inline = cls._stringify(message.get("content"))
+                inline = strip_cch_text(cls._stringify(message.get("content")))
                 if not inline:
                     continue
                 if leading:
