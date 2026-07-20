@@ -76,7 +76,7 @@ only how the request is delivered changes.
 | ----------------------- | ----------------------------- |
 | `claude-sonnet-4.6`     | `anthropic`, `openrouter`     |
 | `claude-haiku-4.5`      | `anthropic`, `openrouter`     |
-| `gemini-3.1-flash-lite` | `openrouter`                  |
+| `gemini-3.1-flash-lite` | `openrouter`, `google`        |
 | `glm-5.2`               | `openrouter`, `zai`           |
 | `kimi-k2.7-code`        | `openrouter`                  |
 
@@ -93,6 +93,11 @@ so GLM's implicit cache reads land reliably turn over turn:
 Note: GLM Coding Plan keys are quota-based subscriptions — telemetry still prices
 zai-served requests at the catalog's per-token GLM rates, so treat those cost rows
 as reference numbers, not spend.
+
+`google` is native Gemini (`GOOGLE_API_KEY`) — live streaming and native implicit
+cache reporting, single-host; see
+[providers and caching](providers-caching.md#gemini-openrouter-by-default-google-native-opt-in)
+for details.
 
 Common reasons to override: you only hold one provider's key, or you want to
 consolidate billing. For example, if you only have an OpenRouter key, route the Claude

@@ -37,8 +37,13 @@ def cost_score(spec: ModelSpec) -> float:
 CATALOG: dict[str, ModelSpec] = {
     "gemini-3.1-flash-lite": ModelSpec(
         name="gemini-3.1-flash-lite",
-        # Native Google Gemini 3 is unsafe for Claude Code tool loops; OpenRouter only.
-        providers={"openrouter": "google/gemini-3.1-flash-lite"},
+        # Default via OpenRouter. Native Google is available opt-in
+        # ({"provider": "google"}): the thoughtSignature requirement on replayed tool
+        # calls is handled by the provider (real signatures round-trip; cross-provider
+        # histories get a bridge value; the Claude boundary strips them), and
+        # responses stream live (Google SSE translated to Anthropic SSE as chunks
+        # arrive) — all verified live.
+        providers={"openrouter": "google/gemini-3.1-flash-lite", "google": "gemini-3.1-flash-lite"},
         default_provider="openrouter",
         pricing=TokenPricing(
             input=0.25,

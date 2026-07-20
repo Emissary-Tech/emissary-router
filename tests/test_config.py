@@ -273,3 +273,23 @@ def test_missing_runtime_env_reports_router_and_enabled_provider_keys(
         "ANTHROPIC_API_KEY",
         "OPENROUTER_API_KEY",
     ]
+
+
+def test_gemini_native_google_is_selectable_but_openrouter_is_default() -> None:
+    gemini = CATALOG["gemini-3.1-flash-lite"]
+    assert gemini.providers == {
+        "openrouter": "google/gemini-3.1-flash-lite",
+        "google": "gemini-3.1-flash-lite",
+    }
+    assert gemini.default_provider == "openrouter"
+
+    config = AppConfig.model_validate(
+        {
+            "models": {"gemini-3.1-flash-lite": {"enabled": True, "provider": "google"}},
+            "default": "gemini-3.1-flash-lite",
+        }
+    )
+    resolved = config.resolve_model("gemini-3.1-flash-lite")
+    assert resolved.provider == "google"
+    assert resolved.model_id == "gemini-3.1-flash-lite"
+    assert config.required_provider_env() == {"google": "GOOGLE_API_KEY"}
