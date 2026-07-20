@@ -41,7 +41,7 @@ def test_thinking_capabilities_cover_exactly_the_catalog() -> None:
 
 def test_glm_and_kimi_are_openrouter_only_with_expected_pricing() -> None:
     glm = CATALOG["glm-5.2"]
-    assert glm.providers == {"openrouter": "z-ai/glm-5.2"}
+    assert glm.providers == {"openrouter": "z-ai/glm-5.2", "zai": "glm-5.2"}
     assert glm.default_provider == "openrouter"
     assert (glm.pricing.input, glm.pricing.output, glm.pricing.cache_read) == (0.94, 3.00, 0.18)
     # OpenRouter implicit caching: no write premium, so cache_write == input price.
@@ -273,3 +273,23 @@ def test_missing_runtime_env_reports_router_and_enabled_provider_keys(
         "ANTHROPIC_API_KEY",
         "OPENROUTER_API_KEY",
     ]
+
+
+def test_gemini_native_google_is_selectable_but_openrouter_is_default() -> None:
+    gemini = CATALOG["gemini-3.1-flash-lite"]
+    assert gemini.providers == {
+        "openrouter": "google/gemini-3.1-flash-lite",
+        "google": "gemini-3.1-flash-lite",
+    }
+    assert gemini.default_provider == "openrouter"
+
+    config = AppConfig.model_validate(
+        {
+            "models": {"gemini-3.1-flash-lite": {"enabled": True, "provider": "google"}},
+            "default": "gemini-3.1-flash-lite",
+        }
+    )
+    resolved = config.resolve_model("gemini-3.1-flash-lite")
+    assert resolved.provider == "google"
+    assert resolved.model_id == "gemini-3.1-flash-lite"
+    assert config.required_provider_env() == {"google": "GOOGLE_API_KEY"}

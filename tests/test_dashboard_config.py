@@ -79,7 +79,7 @@ def test_get_config_exposes_provider_choices(tmp_path):
     assert set(haiku["providers"]) == {"anthropic", "openrouter"}
     assert haiku["provider"] == "anthropic"  # catalog default
     gemini = models["gemini-3.1-flash-lite"]
-    assert gemini["providers"] == ["openrouter"]
+    assert set(gemini["providers"]) == {"openrouter", "google"}
 
 
 def test_put_provider_override_persists(tmp_path):

@@ -7,21 +7,45 @@ by the catalog, not your config.
 |---|---|---|---|
 | `claude-sonnet-4.6` | Anthropic | `claude-sonnet-4-6` | 200K (1M with the `context-1m` beta) |
 | `claude-haiku-4.5` | Anthropic | `claude-haiku-4-5` | 200K |
-| `gemini-3.1-flash-lite` | OpenRouter | `google/gemini-3.1-flash-lite` | 1M |
-| `glm-5.2` | OpenRouter | `z-ai/glm-5.2` | 1M |
+| `gemini-3.1-flash-lite` | OpenRouter (default) or Google native | `google/gemini-3.1-flash-lite` / `gemini-3.1-flash-lite` | 1M |
+| `glm-5.2` | OpenRouter (default) or Z.ai native | `z-ai/glm-5.2` / `glm-5.2` | 1M |
 | `kimi-k2.7-code` | OpenRouter | `moonshotai/kimi-k2.7-code` | 256K |
 
 Provider API keys come from the environment (`ANTHROPIC_API_KEY`,
-`OPENROUTER_API_KEY`), loaded from `~/.emissary-router/.env` if present. Only the
+`OPENROUTER_API_KEY`, `ZAI_API_KEY` when GLM is configured with
+`"provider": "zai"`), loaded from `~/.emissary-router/.env` if present. Only the
 providers used by enabled models need keys.
 
-## Why Gemini goes through OpenRouter
+### Z.ai native for GLM
+
+Z.ai's coding endpoint speaks the Anthropic Messages protocol, so the router serves
+it through the same code path as Anthropic (verified live: streaming SSE shapes,
+tool_use round trips, adaptive thinking + effort params, and implicit cache reads
+reported as `cache_read_input_tokens`). One incompatibility is handled in the
+provider: z.ai signs thinking blocks with its own opaque signatures, which real
+Anthropic rejects on replay — the router restamps them with the same synthetic
+marker the OpenRouter path uses, so switching models mid-session stays safe in
+both directions (both verified live).
+
+## Gemini: OpenRouter by default, Google native opt-in
 
 Native Google Gemini 3 function calling requires `thoughtSignature` values to be
-returned on the tool-call history. Claude Code's Anthropic-format requests don't
-carry those, and routing can switch providers between turns, so native Gemini is not
-safe for Claude Code tool loops. The catalog therefore serves Gemini through
-OpenRouter, which handles this for Claude Code workloads.
+returned on the tool-call history — something Claude Code's Anthropic-format
+requests don't carry, and that cross-provider routing would otherwise break. The
+native provider handles this: real signatures round-trip on `tool_use` blocks
+(as `thought_signature`), histories minted by other providers get a bridge value,
+and the Claude boundary strips the field before it can 400 ("Extra inputs are not
+permitted"). Tool loops, cross-provider switches in both directions, and CC-shaped
+thinking/effort requests are live-verified.
+
+The native path is at feature parity with the OpenRouter one: responses stream for
+real (Google SSE translated live into Anthropic SSE — thought parts as a thinking
+block, text deltas, whole functionCall parts as tool_use blocks), and implicit cache
+reads are reported natively (`cachedContentTokenCount`; measured — Google caches
+prefix *fragments*, so a warm turn credits part of the prefix rather than all of
+it, and short prefixes below the cache minimum report nothing). OpenRouter simply
+remains the recommended default; pick `"provider": "google"` (with
+`GOOGLE_API_KEY`) for first-party serving and single-host caching.
 
 ## Streaming
 
@@ -32,7 +56,9 @@ Code update thinking is on by default, so generations routinely reason at length
 before the first output token; live translation keeps the client fed the whole time
 instead of buffering until the end. Upstream errors before any bytes are sent return
 their real HTTP status; mid-stream failures emit a terminal SSE `error` event.
-Anthropic requests were always a raw streaming passthrough.
+Native Google streams the same way (Google SSE translated live), z.ai streams the
+upstream's Anthropic SSE with only thinking signatures rewritten in-flight, and
+native Anthropic requests were always a raw streaming passthrough.
 
 ## Context windows and long conversations
 
@@ -93,13 +119,13 @@ reports them.
 
 ### Cache support by provider and model
 
-| Model | anthropic | openrouter |
-|---|---|---|
-| `claude-sonnet-4.6` | ✅ explicit prompt cache | ✅ Anthropic cache accounting via OpenRouter |
-| `claude-haiku-4.5` | ✅ explicit prompt cache | ✅ Anthropic cache accounting via OpenRouter |
-| `gemini-3.1-flash-lite` | — | ⚠️ implicit, per-host |
-| `glm-5.2` | — | ⚠️ implicit, per-host |
-| `kimi-k2.7-code` | — | ⚠️ implicit, per-host |
+| Model | anthropic | openrouter | zai | google |
+|---|---|---|---|---|
+| `claude-sonnet-4.6` | ✅ explicit prompt cache | ✅ Anthropic cache accounting via OpenRouter | — | — |
+| `claude-haiku-4.5` | ✅ explicit prompt cache | ✅ Anthropic cache accounting via OpenRouter | — | — |
+| `gemini-3.1-flash-lite` | — | ⚠️ implicit, per-host | — | ⚠️ implicit, single host — reads land (measured; partial-fragment credits) |
+| `glm-5.2` | — | ⚠️ implicit, per-host | ⚠️ implicit, single host — reads land reliably (measured) | — |
+| `kimi-k2.7-code` | — | ⚠️ implicit, per-host | — | — |
 
 - ✅ — deterministic caching: `cache_control` breakpoints pass through and cache
   reads/writes are reported reliably, so the router can trust them for its cost

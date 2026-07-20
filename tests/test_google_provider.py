@@ -97,28 +97,20 @@ def test_google_response_maps_tool_call_and_cache_usage() -> None:
     assert message["content"][1]["name"] == "Read"
 
 
-def test_google_anthropic_sse_contains_cache_usage() -> None:
-    message = {
-        "id": "msg_1",
-        "type": "message",
-        "role": "assistant",
-        "model": "gemini-3.1-flash-lite",
-        "content": [{"type": "text", "text": "done"}],
-        "stop_reason": "end_turn",
-        "stop_sequence": None,
-        "usage": {
-            "input_tokens": 300,
-            "output_tokens": 5,
-            "cache_read_input_tokens": 700,
-            "cache_creation_input_tokens": 0,
-        },
-    }
-
-    sse = b"".join(GoogleProvider.anthropic_sse(message)).decode()
-
-    assert "message_start" in sse
-    assert '"cache_read_input_tokens": 700' in sse
-    assert '"output_tokens": 5' in sse
+def test_google_stream_translation_backfills_cache_usage() -> None:
+    text, sink = _run_google_translation([
+        {"responseId": "r1",
+         "candidates": [{"content": {"parts": [{"text": "done"}]}, "finishReason": "STOP"}],
+         "usageMetadata": {"promptTokenCount": 1000, "cachedContentTokenCount": 700,
+                           "candidatesTokenCount": 5}},
+    ])
+    # message_start carries zeros (usage arrives at stream end); the final
+    # message_delta backfills the cumulative numbers including cache reads.
+    delta_part = text.split('"type": "message_delta"', 1)[1]
+    assert '"input_tokens": 300' in delta_part
+    assert '"cache_read_input_tokens": 700' in delta_part
+    assert '"output_tokens": 5' in delta_part
+    assert sink["usageMetadata"]["cachedContentTokenCount"] == 700
 
 
 def test_google_thinking_effort_mapping_preserves_minimal() -> None:
@@ -217,9 +209,6 @@ def test_from_google_response_preserves_signature_and_surfaces_thought() -> None
     assert types == ["thinking", "tool_use"]
     assert msg["content"][0]["signature"] == "emissary:non-anthropic-reasoning"
     assert msg["content"][1]["thought_signature"] == "sig-abc"
-    # buffered SSE replay must handle the thinking block (no KeyError on id/name)
-    sse = b"".join(GoogleProvider.anthropic_sse(msg)).decode()
-    assert '"thinking_delta"' in sse and '"signature_delta"' in sse
 
 
 def test_google_trailing_system_stays_positioned_and_leading_folds() -> None:
@@ -236,3 +225,51 @@ def test_google_trailing_system_stays_positioned_and_leading_folds() -> None:
     assert [c["role"] for c in contents] == ["user", "user"]
     assert "R1" in contents[1]["parts"][0]["text"]
     assert contents[1]["parts"][0]["text"].count("<system-reminder") == 1
+
+
+def _run_google_translation(chunks):
+    import asyncio
+    import json as _json
+
+    lines = ["data: " + _json.dumps(c) for c in chunks]
+
+    async def aiter():
+        for line in lines:
+            yield line
+
+    async def run():
+        sink: dict = {}
+        events = []
+        async for ev in GoogleProvider._iter_anthropic_events(aiter(), "gemini-3.1-flash-lite", sink):
+            events.append(ev.decode())
+        return "".join(events), sink
+
+    return asyncio.run(run())
+
+
+def test_google_stream_translation_thought_text_and_tools() -> None:
+    text, sink = _run_google_translation([
+        {"responseId": "r1", "modelVersion": "gemini-3.1-flash-lite",
+         "candidates": [{"content": {"parts": [{"thought": True, "text": "planning"}]}}]},
+        {"candidates": [{"content": {"parts": [{"text": "Hel"}]}}]},
+        {"candidates": [{"content": {"parts": [{"text": "lo"}]}}]},
+        {"candidates": [{"content": {"parts": [
+            {"functionCall": {"name": "get_weather", "args": {"city": "Paris"}},
+             "thoughtSignature": "sig-abc"}]},
+            "finishReason": "STOP"}],
+         "usageMetadata": {"promptTokenCount": 12, "candidatesTokenCount": 7}},
+    ])
+
+    assert "event: message_start" in text
+    # thought parts stream as a thinking block closed with the synthetic signature
+    assert '"thinking_delta"' in text and '"thinking": "planning"' in text
+    assert '"signature_delta"' in text and "emissary:non-anthropic-reasoning" in text
+    # text streams as deltas after the thinking block closes
+    assert '"text": "Hel"' in text and '"text": "lo"' in text
+    # functionCall arrives whole -> complete tool_use block, real signature preserved
+    assert '"type": "tool_use"' in text and '"name": "get_weather"' in text
+    assert '"thought_signature": "sig-abc"' in text
+    assert '"input_json_delta"' in text  # args delivered as one complete json blob
+    assert '"stop_reason": "tool_use"' in text
+    assert "event: message_stop" in text
+    assert sink["responseId"] == "r1"

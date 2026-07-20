@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-ProviderName = Literal["anthropic", "openrouter", "google"]
+ProviderName = Literal["anthropic", "openrouter", "google", "zai"]
 
 
 @dataclass(frozen=True)
@@ -37,8 +37,13 @@ def cost_score(spec: ModelSpec) -> float:
 CATALOG: dict[str, ModelSpec] = {
     "gemini-3.1-flash-lite": ModelSpec(
         name="gemini-3.1-flash-lite",
-        # Native Google Gemini 3 is unsafe for Claude Code tool loops; OpenRouter only.
-        providers={"openrouter": "google/gemini-3.1-flash-lite"},
+        # Default via OpenRouter. Native Google is available opt-in
+        # ({"provider": "google"}): the thoughtSignature requirement on replayed tool
+        # calls is handled by the provider (real signatures round-trip; cross-provider
+        # histories get a bridge value; the Claude boundary strips them), and
+        # responses stream live (Google SSE translated to Anthropic SSE as chunks
+        # arrive) — all verified live.
+        providers={"openrouter": "google/gemini-3.1-flash-lite", "google": "gemini-3.1-flash-lite"},
         default_provider="openrouter",
         pricing=TokenPricing(
             input=0.25,
@@ -50,9 +55,12 @@ CATALOG: dict[str, ModelSpec] = {
     ),
     "glm-5.2": ModelSpec(
         name="glm-5.2",
-        # OpenRouter only. Caching is implicit (no cache-write premium), so
-        # cache_write == input price; only cache reads are discounted.
-        providers={"openrouter": "z-ai/glm-5.2"},
+        # Caching is implicit (no cache-write premium), so cache_write == input
+        # price; only cache reads are discounted. "zai" is Z.ai's native
+        # Anthropic-compatible endpoint (GLM Coding Plan) — opt in per model with
+        # {"provider": "zai"}; unlike OpenRouter's multi-host routing it serves from
+        # one place, so implicit cache reads land reliably.
+        providers={"openrouter": "z-ai/glm-5.2", "zai": "glm-5.2"},
         default_provider="openrouter",
         pricing=TokenPricing(
             input=0.94,
@@ -113,6 +121,7 @@ PROVIDER_ENV: dict[ProviderName, str] = {
     "anthropic": "ANTHROPIC_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
     "google": "GOOGLE_API_KEY",
+    "zai": "ZAI_API_KEY",
 }
 
 ROUTER_API_KEY_ENV = "EMISSARY_ROUTER_API_KEY"

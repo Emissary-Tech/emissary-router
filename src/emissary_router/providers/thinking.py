@@ -43,10 +43,13 @@ THINKING_CAPABILITIES = {
         accepts_adaptive_thinking=False,
         max_effort="high",
     ),
-    # OpenRouter: GLM-5.2 supports reasoning effort high/xhigh (xhigh == max).
+    # GLM-5.2 supports reasoning effort high/xhigh (xhigh == max). Adaptive thinking
+    # is accepted by z.ai's native Anthropic-compatible endpoint (live-verified;
+    # only the anthropic-format paths consult this flag — the OpenRouter path
+    # translates via the effort param regardless).
     "glm-5.2": ModelThinkingCapabilities(
         accepts_effort_param=True,
-        accepts_adaptive_thinking=False,
+        accepts_adaptive_thinking=True,
         max_effort="xhigh",
     ),
     # OpenRouter: Kimi K2.7 Code reasons via the effort param (OpenRouter maps the level
