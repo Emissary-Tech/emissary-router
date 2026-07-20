@@ -355,3 +355,29 @@ def test_xhigh_effort_clamps_to_max_for_sonnet_and_drops_for_haiku() -> None:
     normalize_anthropic_thinking_for_model(body, "claude-haiku-4.5")
     assert body["thinking"] == {"type": "enabled", "budget_tokens": 63999}
     assert "effort" not in body["output_config"]
+
+
+def test_empty_signature_thinking_is_stripped_like_synthetic() -> None:
+    # A thinking block with no/empty signature can never be a valid Anthropic replay
+    # (native thinking is always signed): it means a foreign provider's block lost its
+    # marker — e.g. Claude Code only collects signatures from signature_delta events,
+    # so a provider that carried it on content_block_start yields signature "".
+    # Live-observed 400: "Invalid `signature` in `thinking` block".
+    from emissary_router.providers.anthropic import AnthropicProvider
+
+    body = {
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "leaked", "signature": ""},
+                {"type": "text", "text": "hello"},
+            ]},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "leaked2"},  # signature key absent
+                {"type": "text", "text": "again"},
+            ]},
+        ]
+    }
+    AnthropicProvider._strip_synthetic_thinking(body)
+    for message in body["messages"][1:]:
+        assert [b["type"] for b in message["content"]] == ["text"]

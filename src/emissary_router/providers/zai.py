@@ -53,10 +53,15 @@ class ZaiProvider(AnthropicProvider):
         return payload
 
     def _rewrite_sse_line(self, line: str) -> str:
-        # z.ai carries the signature on the thinking content_block_start
-        # (live-observed); signature_delta is handled too in case that changes.
+        # z.ai carries the signature on the thinking content_block_start; native
+        # Anthropic delivers it via a signature_delta event, and Claude Code only
+        # collects it from THERE — a signature that stays in content_block_start ends
+        # up stored as "" and 400s ("Invalid `signature`") when the next turn routes
+        # to native Claude (observed in a live session). So besides restamping, a
+        # synthetic signature_delta event is injected right after every thinking
+        # content_block_start; the upstream's own blank line closes it.
         stripped = line.rstrip("\r")
-        if not stripped.startswith("data: ") or '"signature"' not in stripped:
+        if not stripped.startswith("data: "):
             return line
         try:
             event = json.loads(stripped[6:])
@@ -64,9 +69,24 @@ class ZaiProvider(AnthropicProvider):
             return line
         changed = False
         block = event.get("content_block")
-        if isinstance(block, dict) and block.get("type") == "thinking" and block.get("signature"):
-            block["signature"] = SYNTHETIC_THINKING_SIGNATURE
-            changed = True
+        if isinstance(block, dict) and block.get("type") == "thinking":
+            if block.get("signature"):
+                block["signature"] = SYNTHETIC_THINKING_SIGNATURE
+                changed = True
+            injected = {
+                "type": "content_block_delta",
+                "index": event.get("index", 0),
+                "delta": {
+                    "type": "signature_delta",
+                    "signature": SYNTHETIC_THINKING_SIGNATURE,
+                },
+            }
+            out = "data: " + json.dumps(event, ensure_ascii=False) if changed else stripped
+            return (
+                out
+                + "\n\nevent: content_block_delta\ndata: "
+                + json.dumps(injected, ensure_ascii=False)
+            )
         delta = event.get("delta")
         if isinstance(delta, dict) and delta.get("type") == "signature_delta" and delta.get("signature"):
             delta["signature"] = SYNTHETIC_THINKING_SIGNATURE

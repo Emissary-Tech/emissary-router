@@ -312,7 +312,15 @@ class AnthropicProvider:
                 if (
                     role == "assistant"
                     and block.get("type") == "thinking"
-                    and block.get("signature") == SYNTHETIC_THINKING_SIGNATURE
+                    and (
+                        block.get("signature") == SYNTHETIC_THINKING_SIGNATURE
+                        # A missing/empty signature can never be a valid Anthropic
+                        # replay (native thinking is always signed) — it means the
+                        # block came from another provider and lost its marker, e.g.
+                        # a client that only collects signatures from signature_delta
+                        # events. Anthropic 400s on it; drop it like a synthetic one.
+                        or not block.get("signature")
+                    )
                 ):
                     message_changed = True
                     continue

@@ -72,11 +72,23 @@ def test_response_thinking_signature_is_restamped() -> None:
 def test_sse_thinking_signature_lines_are_restamped() -> None:
     provider = _provider()
 
-    # z.ai carries the signature on the thinking content_block_start (live-observed)
+    # z.ai carries the signature on the thinking content_block_start (live-observed),
+    # but Claude Code only collects signatures from signature_delta events — so the
+    # rewrite must BOTH restamp the start and inject a synthetic signature_delta
+    # event (otherwise CC stores signature "" and native Claude 400s on the replay;
+    # observed live).
     start = ('data: {"type": "content_block_start", "index": 0, "content_block": '
              '{"type": "thinking", "thinking": "", "signature": "0cffa860c00e4618"}}')
     out = provider._rewrite_sse_line(start)
-    assert json.loads(out[6:])["content_block"]["signature"] == SYNTHETIC_THINKING_SIGNATURE
+    first, injected = out.split("\n\n", 1)
+    assert json.loads(first[6:])["content_block"]["signature"] == SYNTHETIC_THINKING_SIGNATURE
+    assert injected.startswith("event: content_block_delta\ndata: ")
+    injected_event = json.loads(injected.split("data: ", 1)[1])
+    assert injected_event["delta"] == {
+        "type": "signature_delta",
+        "signature": SYNTHETIC_THINKING_SIGNATURE,
+    }
+    assert injected_event["index"] == 0
 
     # Anthropic-style late signature handled too, in case z.ai changes shape
     delta = ('data: {"type": "content_block_delta", "index": 0, "delta": '
@@ -93,3 +105,23 @@ def test_sse_thinking_signature_lines_are_restamped() -> None:
         "data: not-json signature",
     ):
         assert provider._rewrite_sse_line(line) == line
+
+
+def test_sonnet5_era_thinking_passes_through_untouched_for_glm() -> None:
+    # z.ai accepts the whole Sonnet 5-era surface natively (live-verified: adaptive +
+    # every effort level minimal..max/xhigh, disabled, enabled+budget all 200), so the
+    # anthropic-format normalization must pass it through without rewriting anything —
+    # rewrites would be silent behavior changes and bust the prompt-shape stability.
+    from emissary_router.providers.thinking import normalize_anthropic_thinking_for_model
+
+    body = {
+        "model": "claude-sonnet-5",
+        "max_tokens": 64000,
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": "xhigh"},
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    changes = normalize_anthropic_thinking_for_model(body, "glm-5.2")
+    assert changes == []
+    assert body["thinking"] == {"type": "adaptive"}
+    assert body["output_config"]["effort"] == "xhigh"
