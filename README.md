@@ -89,8 +89,8 @@ Built-in models:
 
 - `claude-sonnet-4.6` — Anthropic or OpenRouter
 - `claude-haiku-4.5` — Anthropic or OpenRouter
-- `gemini-3.1-flash-lite` — OpenRouter
-- `glm-5.2` — OpenRouter
+- `gemini-3.1-flash-lite` — OpenRouter, or native Google (`provider: "google"`)
+- `glm-5.2` — OpenRouter, or native Z.ai (`provider: "zai"`, e.g. a GLM Coding Plan key)
 - `kimi-k2.7-code` — OpenRouter (always reasons; thinking can't be disabled)
 
 Set `enabled: false` to drop a model, and `provider` to choose how it's served.
@@ -101,7 +101,8 @@ Routing is confidence-gated and **cache-aware by default**: candidates the class
 is confident about are compared by cache-adjusted cost, so the router only switches
 models when it is genuinely cheaper after accounting for the prompt cache it would
 give up (naive per-request switching can cost *more* than not routing at all). Where a
-provider has no reliable cache signal this simply reduces to price-ordered routing.
+provider has no reliable cache signal the estimates simply carry no discount and the
+comparison is a flat per-request price comparison.
 See [Configuration](docs/configuration.md) for details.
 
 ## Docs
