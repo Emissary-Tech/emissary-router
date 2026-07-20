@@ -8,12 +8,24 @@ by the catalog, not your config.
 | `claude-sonnet-4.6` | Anthropic | `claude-sonnet-4-6` | 200K (1M with the `context-1m` beta) |
 | `claude-haiku-4.5` | Anthropic | `claude-haiku-4-5` | 200K |
 | `gemini-3.1-flash-lite` | OpenRouter | `google/gemini-3.1-flash-lite` | 1M |
-| `glm-5.2` | OpenRouter | `z-ai/glm-5.2` | 1M |
+| `glm-5.2` | OpenRouter (default) or Z.ai native | `z-ai/glm-5.2` / `glm-5.2` | 1M |
 | `kimi-k2.7-code` | OpenRouter | `moonshotai/kimi-k2.7-code` | 256K |
 
 Provider API keys come from the environment (`ANTHROPIC_API_KEY`,
-`OPENROUTER_API_KEY`), loaded from `~/.emissary-router/.env` if present. Only the
+`OPENROUTER_API_KEY`, `ZAI_API_KEY` when GLM is configured with
+`"provider": "zai"`), loaded from `~/.emissary-router/.env` if present. Only the
 providers used by enabled models need keys.
+
+### Z.ai native for GLM
+
+Z.ai's coding endpoint speaks the Anthropic Messages protocol, so the router serves
+it through the same code path as Anthropic (verified live: streaming SSE shapes,
+tool_use round trips, adaptive thinking + effort params, and implicit cache reads
+reported as `cache_read_input_tokens`). One incompatibility is handled in the
+provider: z.ai signs thinking blocks with its own opaque signatures, which real
+Anthropic rejects on replay — the router restamps them with the same synthetic
+marker the OpenRouter path uses, so switching models mid-session stays safe in
+both directions (both verified live).
 
 ## Why Gemini goes through OpenRouter
 
@@ -93,13 +105,13 @@ reports them.
 
 ### Cache support by provider and model
 
-| Model | anthropic | openrouter |
-|---|---|---|
-| `claude-sonnet-4.6` | ✅ explicit prompt cache | ✅ Anthropic cache accounting via OpenRouter |
-| `claude-haiku-4.5` | ✅ explicit prompt cache | ✅ Anthropic cache accounting via OpenRouter |
-| `gemini-3.1-flash-lite` | — | ⚠️ implicit, per-host |
-| `glm-5.2` | — | ⚠️ implicit, per-host |
-| `kimi-k2.7-code` | — | ⚠️ implicit, per-host |
+| Model | anthropic | openrouter | zai |
+|---|---|---|---|
+| `claude-sonnet-4.6` | ✅ explicit prompt cache | ✅ Anthropic cache accounting via OpenRouter | — |
+| `claude-haiku-4.5` | ✅ explicit prompt cache | ✅ Anthropic cache accounting via OpenRouter | — |
+| `gemini-3.1-flash-lite` | — | ⚠️ implicit, per-host | — |
+| `glm-5.2` | — | ⚠️ implicit, per-host | ⚠️ implicit, single host — reads land reliably (measured) |
+| `kimi-k2.7-code` | — | ⚠️ implicit, per-host | — |
 
 - ✅ — deterministic caching: `cache_control` breakpoints pass through and cache
   reads/writes are reported reliably, so the router can trust them for its cost

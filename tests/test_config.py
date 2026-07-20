@@ -41,7 +41,7 @@ def test_thinking_capabilities_cover_exactly_the_catalog() -> None:
 
 def test_glm_and_kimi_are_openrouter_only_with_expected_pricing() -> None:
     glm = CATALOG["glm-5.2"]
-    assert glm.providers == {"openrouter": "z-ai/glm-5.2"}
+    assert glm.providers == {"openrouter": "z-ai/glm-5.2", "zai": "glm-5.2"}
     assert glm.default_provider == "openrouter"
     assert (glm.pricing.input, glm.pricing.output, glm.pricing.cache_read) == (0.94, 3.00, 0.18)
     # OpenRouter implicit caching: no write premium, so cache_write == input price.

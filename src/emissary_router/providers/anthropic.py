@@ -84,10 +84,20 @@ def _request_summary(body: dict) -> str:
 
 class AnthropicProvider:
     name = "anthropic"
+    # Subclasses serving Anthropic-COMPATIBLE endpoints (e.g. z.ai) set this to run
+    # responses through the rewrite hooks below. The native path stays a raw
+    # byte-for-byte passthrough.
+    REWRITES_RESPONSES = False
 
     def __init__(self, config: ProviderConfig):
         self._config = config
         self._base_url = (config.base_url or "https://api.anthropic.com").rstrip("/")
+
+    def _rewrite_response_json(self, payload: dict) -> dict:
+        return payload
+
+    def _rewrite_sse_line(self, line: str) -> str:
+        return line
 
     async def messages(
         self,
@@ -130,9 +140,25 @@ class AnthropicProvider:
                             json=body,
                         ) as response:
                             status = response.status_code
-                            async for chunk in response.aiter_raw():
-                                buf.extend(chunk)
-                                yield chunk
+                            if not self.REWRITES_RESPONSES:
+                                async for chunk in response.aiter_raw():
+                                    buf.extend(chunk)
+                                    yield chunk
+                            else:
+                                # Line-buffered so rewrite hooks see complete SSE
+                                # lines regardless of chunk boundaries.
+                                pending = b""
+                                async for chunk in response.aiter_raw():
+                                    pending += chunk
+                                    while (newline := pending.find(b"\n")) != -1:
+                                        line = pending[:newline].decode("utf-8", "replace")
+                                        pending = pending[newline + 1 :]
+                                        out = (self._rewrite_sse_line(line) + "\n").encode("utf-8")
+                                        buf.extend(out)
+                                        yield out
+                                if pending:
+                                    buf.extend(pending)
+                                    yield bytes(pending)
                     except Exception as exc:
                         error = repr(exc)
                         raise
@@ -169,7 +195,7 @@ class AnthropicProvider:
                 response.text[:800],
             )
         try:
-            payload = response.json()
+            payload = self._rewrite_response_json(response.json())
             self._complete(
                 on_complete,
                 self.usage_from_response(payload),

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-ProviderName = Literal["anthropic", "openrouter", "google"]
+ProviderName = Literal["anthropic", "openrouter", "google", "zai"]
 
 
 @dataclass(frozen=True)
@@ -50,9 +50,12 @@ CATALOG: dict[str, ModelSpec] = {
     ),
     "glm-5.2": ModelSpec(
         name="glm-5.2",
-        # OpenRouter only. Caching is implicit (no cache-write premium), so
-        # cache_write == input price; only cache reads are discounted.
-        providers={"openrouter": "z-ai/glm-5.2"},
+        # Caching is implicit (no cache-write premium), so cache_write == input
+        # price; only cache reads are discounted. "zai" is Z.ai's native
+        # Anthropic-compatible endpoint (GLM Coding Plan) — opt in per model with
+        # {"provider": "zai"}; unlike OpenRouter's multi-host routing it serves from
+        # one place, so implicit cache reads land reliably.
+        providers={"openrouter": "z-ai/glm-5.2", "zai": "glm-5.2"},
         default_provider="openrouter",
         pricing=TokenPricing(
             input=0.94,
@@ -113,6 +116,7 @@ PROVIDER_ENV: dict[ProviderName, str] = {
     "anthropic": "ANTHROPIC_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
     "google": "GOOGLE_API_KEY",
+    "zai": "ZAI_API_KEY",
 }
 
 ROUTER_API_KEY_ENV = "EMISSARY_ROUTER_API_KEY"
