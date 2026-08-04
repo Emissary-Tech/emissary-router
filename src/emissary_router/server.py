@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from starlette.responses import JSONResponse
 
+from emissary_router import openai_compat
 from emissary_router.config import load_config, user_config_path
 from emissary_router.dashboard import build_dashboard_router
 from emissary_router.pipeline import RouterPipeline
@@ -57,6 +58,29 @@ def create_app() -> FastAPI:
             "ok": True,
             "default": request.app.state.config.default,
         }
+
+    @app.post("/v1/chat/completions")
+    async def chat_completions(request: Request):
+        """OpenAI-compat entry (non-streaming) — see openai_compat.py. Same auth as
+        /v1/messages; OpenAI SDK clients authenticate via Authorization: Bearer."""
+        body = await request.json()
+        headers = dict(request.headers)
+        if config.server.auth_key:
+            if not _authorized(headers, config.server.auth_key):
+                return JSONResponse(
+                    {
+                        "error": {
+                            "message": "invalid Emissary Router auth key",
+                            "type": "api_error",
+                            "code": "unauthorized",
+                        }
+                    },
+                    status_code=401,
+                )
+            headers = _strip_router_auth(headers, config.server.auth_key)
+        return await openai_compat.handle_chat_completions(
+            request.app.state.pipeline, body, headers
+        )
 
     @app.post("/v1/messages")
     async def messages(request: Request):
