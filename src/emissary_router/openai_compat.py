@@ -213,6 +213,12 @@ def messages_response_to_chat(resp: dict, requested_model: str) -> dict:
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": prompt_tokens + completion_tokens,
+            # OpenAI-standard cache detail so clients that log it (the CPST harness
+            # does) can recompute cache-aware cost per row. cached = cache READS;
+            # cache writes have no OpenAI equivalent and live in ER telemetry.
+            "prompt_tokens_details": {
+                "cached_tokens": usage.get("cache_read_input_tokens") or 0
+            },
         },
     }
 

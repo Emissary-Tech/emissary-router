@@ -119,6 +119,7 @@ def test_messages_response_to_chat_tool_use() -> None:
     assert out["usage"]["prompt_tokens"] == 550
     assert out["usage"]["completion_tokens"] == 20
     assert out["usage"]["total_tokens"] == 570
+    assert out["usage"]["prompt_tokens_details"]["cached_tokens"] == 400
 
 
 def test_messages_response_to_chat_plain_completion() -> None:
