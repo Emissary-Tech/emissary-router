@@ -16,11 +16,11 @@ from emissary_router.routing.policy import choose_model
 def _config(**overrides) -> AppConfig:
     raw = {
         "models": {
-            "claude-sonnet-4.6": True,
+            "claude-sonnet-5": True,
             "claude-haiku-4.5": True,
             "gemini-3.1-flash-lite": True,
         },
-        "default": "claude-sonnet-4.6",
+        "default": "claude-sonnet-5",
         "confidence": 0.8,
     }
     raw.update(overrides)
@@ -59,7 +59,7 @@ def test_deviates_to_cheapest_confident_model() -> None:
         {
             "gemini-3.1-flash-lite": 0.81,
             "claude-haiku-4.5": 0.9,
-            "claude-sonnet-4.6": 0.2,
+            "claude-sonnet-5": 0.2,
         },
     )
 
@@ -73,11 +73,11 @@ def test_falls_back_to_default_when_no_model_is_confident() -> None:
         {
             "gemini-3.1-flash-lite": 0.2,
             "claude-haiku-4.5": 0.3,
-            "claude-sonnet-4.6": 0.4,
+            "claude-sonnet-5": 0.4,
         },
     )
 
-    assert decision.model_name == "claude-sonnet-4.6"
+    assert decision.model_name == "claude-sonnet-5"
     assert decision.reason == "default"
 
 
@@ -91,9 +91,9 @@ def _config_with_kimi() -> AppConfig:
                 "gemini-3.1-flash-lite": True,
                 "kimi-k2.7-code": True,
                 "claude-haiku-4.5": True,
-                "claude-sonnet-4.6": True,
+                "claude-sonnet-5": True,
             },
-            "default": "claude-sonnet-4.6",
+            "default": "claude-sonnet-5",
             "confidence": 0.8,
         }
     )
@@ -105,7 +105,7 @@ def test_background_skips_always_on_reasoning_models() -> None:
         "gemini-3.1-flash-lite": 0.2,
         "kimi-k2.7-code": 0.95,  # confident, cheapest confident -> would win normally
         "claude-haiku-4.5": 0.1,
-        "claude-sonnet-4.6": 0.1,
+        "claude-sonnet-5": 0.1,
     }
 
     # main call: kimi wins
@@ -113,7 +113,7 @@ def test_background_skips_always_on_reasoning_models() -> None:
 
     # background call: kimi (always-on reasoning) is skipped -> nobody else confident -> default
     decision = choose_model(config, probs, skip_models=always_on_reasoning_models())
-    assert decision.model_name == "claude-sonnet-4.6"
+    assert decision.model_name == "claude-sonnet-5"
     assert decision.reason == "default"
     assert "kimi-k2.7-code" in always_on_reasoning_models()
 
@@ -124,7 +124,7 @@ def test_background_with_always_on_default_falls_back_to_cheapest_usable() -> No
             "models": {
                 "gemini-3.1-flash-lite": True,
                 "kimi-k2.7-code": True,
-                "claude-sonnet-4.6": True,
+                "claude-sonnet-5": True,
             },
             "default": "kimi-k2.7-code",
             "confidence": 0.8,
@@ -161,7 +161,7 @@ def test_background_guard_applies_on_the_cache_aware_path_too() -> None:
         "gemini-3.1-flash-lite": 0.2,
         "kimi-k2.7-code": 0.95,
         "claude-haiku-4.5": 0.1,
-        "claude-sonnet-4.6": 0.1,
+        "claude-sonnet-5": 0.1,
     }
     decision = choose_model(
         config,
@@ -170,7 +170,7 @@ def test_background_guard_applies_on_the_cache_aware_path_too() -> None:
         cost_features=_features(),
         cache_ledger=CacheLedger(),
     )
-    assert decision.model_name == "claude-sonnet-4.6"
+    assert decision.model_name == "claude-sonnet-5"
     assert decision.reason == "cache_aware:no_confident_candidate"
 
 
@@ -183,13 +183,13 @@ def test_cache_aware_keeps_default_when_candidate_below_confidence() -> None:
         {
             "gemini-3.1-flash-lite": 0.2,
             "claude-haiku-4.5": 0.79,
-            "claude-sonnet-4.6": 0.2,
+            "claude-sonnet-5": 0.2,
         },
         cost_features=_features(),
         cache_ledger=CacheLedger(),
     )
 
-    assert decision.model_name == "claude-sonnet-4.6"
+    assert decision.model_name == "claude-sonnet-5"
     assert decision.reason == "cache_aware:no_confident_candidate"
 
 
@@ -198,7 +198,7 @@ def test_cache_aware_keeps_warm_default_when_candidate_cold_costs_more() -> None
     ledger = CacheLedger()
     features = _features(prefix_tokens=30000, input_tokens=31000)
     ledger.observe(
-        config.resolve_model("claude-sonnet-4.6"),
+        config.resolve_model("claude-sonnet-5"),
         features,
         Usage(cache_creation_input_tokens=30000),
     )
@@ -208,13 +208,13 @@ def test_cache_aware_keeps_warm_default_when_candidate_cold_costs_more() -> None
         {
             "gemini-3.1-flash-lite": 0.2,
             "claude-haiku-4.5": 0.95,
-            "claude-sonnet-4.6": 0.1,
+            "claude-sonnet-5": 0.1,
         },
         cost_features=features,
         cache_ledger=ledger,
     )
 
-    assert decision.model_name == "claude-sonnet-4.6"
+    assert decision.model_name == "claude-sonnet-5"
     assert decision.reason == "cache_aware:warm_default_cheaper"
     assert decision.cache_prediction["warm"] is True
 
@@ -234,7 +234,7 @@ def test_cache_aware_deviates_when_confident_candidate_is_warm_and_cheaper() -> 
         {
             "gemini-3.1-flash-lite": 0.2,
             "claude-haiku-4.5": 0.95,
-            "claude-sonnet-4.6": 0.1,
+            "claude-sonnet-5": 0.1,
         },
         cost_features=features,
         cache_ledger=ledger,
@@ -256,7 +256,7 @@ def test_cache_aware_keeps_warm_default_when_history_dominates_prefix() -> None:
     features = _features(prefix_tokens=8000, input_tokens=68000)
     # Last turn the provider reported a large warm read on the default.
     ledger.observe(
-        config.resolve_model("claude-sonnet-4.6"),
+        config.resolve_model("claude-sonnet-5"),
         features,
         Usage(input_tokens=1000, cache_read_input_tokens=67000),
     )
@@ -266,17 +266,17 @@ def test_cache_aware_keeps_warm_default_when_history_dominates_prefix() -> None:
         {
             "gemini-3.1-flash-lite": 0.2,
             "claude-haiku-4.5": 0.95,  # confident and cheaper *when cold*
-            "claude-sonnet-4.6": 0.1,
+            "claude-sonnet-5": 0.1,
         },
         cost_features=features,
         cache_ledger=ledger,
     )
 
-    assert decision.model_name == "claude-sonnet-4.6"
+    assert decision.model_name == "claude-sonnet-5"
     assert decision.reason == "cache_aware:warm_default_cheaper"
     assert decision.cache_prediction["warm"] is True
     # The warm credit must reflect the observed cache (67k), not the system+tools prefix.
-    assert decision.estimated_costs["claude-sonnet-4.6"]["cache_read_tokens"] == 67000
+    assert decision.estimated_costs["claude-sonnet-5"]["cache_read_tokens"] == 67000
 
 
 def test_cache_aware_labels_cold_stay_as_default_not_beaten() -> None:
@@ -288,7 +288,7 @@ def test_cache_aware_labels_cold_stay_as_default_not_beaten() -> None:
             "models": {
                 "gemini-3.1-flash-lite": True,
                 "claude-haiku-4.5": True,
-                "claude-sonnet-4.6": True,
+                "claude-sonnet-5": True,
             },
             "default": "gemini-3.1-flash-lite",
             "confidence": 0.8,
@@ -298,7 +298,7 @@ def test_cache_aware_labels_cold_stay_as_default_not_beaten() -> None:
     decision = choose_model(
         config,
         {
-            "claude-sonnet-4.6": 0.95,  # confident but pricier than the default
+            "claude-sonnet-5": 0.95,  # confident but pricier than the default
             "claude-haiku-4.5": 0.1,
             "gemini-3.1-flash-lite": 0.1,
         },
@@ -312,7 +312,7 @@ def test_cache_aware_labels_cold_stay_as_default_not_beaten() -> None:
 
 
 def test_cache_aware_uses_any_positive_savings_without_margin() -> None:
-    baseline = _estimated("claude-sonnet-4.6", total_usd=1.0)
+    baseline = _estimated("claude-sonnet-5", total_usd=1.0)
     candidate = _estimated("claude-haiku-4.5", total_usd=0.999999)
 
     assert is_cheaper(candidate, baseline) is True

@@ -12,7 +12,7 @@ Prices are USD per 1M tokens.
 | `kimi-k2.7-code` | 0.74 | 3.50 | 0.15 | 0.74 |
 | `glm-5.2` | 0.94 | 3.00 | 0.18 | 0.94 |
 | `claude-haiku-4.5` | 1.00 | 5.00 | 0.10 | 1.25 |
-| `claude-sonnet-4.6` | 3.00 | 15.00 | 0.30 | 3.75 |
+| `claude-sonnet-5` | 3.00 | 15.00 | 0.30 | 3.75 |
 
 For glm / kimi / gemini the cache-write price equals the input price: their caching
 is implicit, so there is no write premium — only cache reads are discounted.

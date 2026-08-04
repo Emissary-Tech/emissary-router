@@ -15,6 +15,7 @@ from emissary_router.providers.base import sanitize_tool_id, strip_cch_text
 from emissary_router.providers.thinking import (
     SYNTHETIC_THINKING_SIGNATURE,
     normalize_anthropic_thinking_for_model,
+    strip_unsupported_sampling_params,
 )
 
 logger = logging.getLogger(__name__)
@@ -120,6 +121,7 @@ class AnthropicProvider:
         # provider prompt cache and diverge from the ledger's stripped prefix_hash.
         self._strip_cch_attribution(body)
         thinking_changes = normalize_anthropic_thinking_for_model(body, model.name)
+        thinking_changes += strip_unsupported_sampling_params(body, model.name)
         body["model"] = model.model_id
         headers = self._forward_headers(request.headers)
         if self._config.api_key and "x-api-key" not in {k.lower() for k in headers}:

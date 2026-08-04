@@ -49,8 +49,8 @@ def test_openrouter_request_maps_tools_reasoning_and_cache_control() -> None:
 
     req = OpenRouterProvider.to_openai_request(
         body,
-        "anthropic/claude-sonnet-4.6",
-        model_name="claude-sonnet-4.6",
+        "anthropic/claude-sonnet-5",
+        model_name="claude-sonnet-5",
     )
 
     assert req["messages"][0] == {"role": "system", "content": "You are Claude Code."}
@@ -84,8 +84,8 @@ def test_openrouter_reasoning_effort_clamps_from_model_capability() -> None:
 def test_openrouter_sonnet_max_effort_maps_to_xhigh() -> None:
     req = OpenRouterProvider.to_openai_request(
         {"messages": [], "thinking": {"effort": "max"}},
-        "anthropic/claude-sonnet-4.6",
-        model_name="claude-sonnet-4.6",
+        "anthropic/claude-sonnet-5",
+        model_name="claude-sonnet-5",
     )
 
     assert req["reasoning"]["effort"] == "xhigh"
@@ -159,7 +159,7 @@ def test_openrouter_disable_thinking_still_sends_none_for_normal_models() -> Non
 def test_openrouter_reasoning_budget_maps_to_max_tokens() -> None:
     req = OpenRouterProvider.to_openai_request(
         {"messages": [], "thinking": {"type": "enabled", "budget_tokens": 4096}},
-        "anthropic/claude-sonnet-4.6",
+        "anthropic/claude-sonnet-5",
     )
 
     assert req["reasoning"]["max_tokens"] == 4096

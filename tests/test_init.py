@@ -21,32 +21,36 @@ def test_init_skips_env_keys_and_writes_prompted(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "from-shell")
     monkeypatch.delenv("EMISSARY_ROUTER_API_KEY", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    answers = iter(["emkey", "orkey"])  # EMISSARY_ROUTER_API_KEY, OPENROUTER_API_KEY
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    # EMISSARY_ROUTER_API_KEY, then provider keys sorted by provider name
+    answers = iter(["emkey", "oaikey", "orkey"])
     monkeypatch.setattr(getpass, "getpass", lambda prompt="": next(answers))
 
     assert _cmd_init(argparse.Namespace(no_prompt=False)) == 0
     assert user_config_path().exists()
     env = read_env_file(user_env_path())
     assert env["EMISSARY_ROUTER_API_KEY"] == "emkey"
+    assert env["OPENAI_API_KEY"] == "oaikey"
     assert env["OPENROUTER_API_KEY"] == "orkey"
     assert "ANTHROPIC_API_KEY" not in env  # came from the shell, not persisted
 
 
 def test_init_keeps_existing_value_on_empty_input(tmp_path, monkeypatch):
     _prep(tmp_path, monkeypatch)
-    for key in ["EMISSARY_ROUTER_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY"]:
+    for key in ["EMISSARY_ROUTER_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY"]:
         monkeypatch.delenv(key, raising=False)
     env_path = user_env_path()
     env_path.parent.mkdir(parents=True, exist_ok=True)
     env_path.write_text("EMISSARY_ROUTER_API_KEY=old-key\n")
     # empty for EMISSARY (keep old), new values for the rest
-    answers = iter(["", "ant", "orr"])
+    answers = iter(["", "ant", "oai", "orr"])
     monkeypatch.setattr(getpass, "getpass", lambda prompt="": next(answers))
 
     assert _cmd_init(argparse.Namespace(no_prompt=False)) == 0
     env = read_env_file(env_path)
     assert env["EMISSARY_ROUTER_API_KEY"] == "old-key"  # kept
     assert env["ANTHROPIC_API_KEY"] == "ant"
+    assert env["OPENAI_API_KEY"] == "oai"
     assert env["OPENROUTER_API_KEY"] == "orr"
 
 
@@ -65,7 +69,7 @@ def test_init_no_prompt_adds_missing_required_keys(tmp_path, monkeypatch):
     monkeypatch.setenv("EMISSARY_ROUTER_HOME", str(tmp_path))
     monkeypatch.delenv("EMISSARY_ROUTER_CONFIG", raising=False)
     monkeypatch.chdir(tmp_path)
-    for key in ["EMISSARY_ROUTER_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY"]:
+    for key in ["EMISSARY_ROUTER_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY"]:
         monkeypatch.delenv(key, raising=False)
     env_path = user_env_path()
     env_path.parent.mkdir(parents=True, exist_ok=True)
