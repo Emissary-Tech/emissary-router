@@ -13,11 +13,11 @@ def _config() -> AppConfig:
     return AppConfig.model_validate(
         {
             "models": {
-                "claude-sonnet-4.6": True,
+                "claude-sonnet-5": True,
                 "claude-haiku-4.5": True,
                 "gemini-3.1-flash-lite": True,
             },
-            "default": "claude-sonnet-4.6",
+            "default": "claude-sonnet-5",
         }
     )
 
@@ -35,7 +35,7 @@ def _features(session_id: str | None = "session-1") -> RequestCostFeatures:
 
 def test_predicts_anthropic_creation_as_warm() -> None:
     config = _config()
-    model = config.resolve_model("claude-sonnet-4.6")
+    model = config.resolve_model("claude-sonnet-5")
     ledger = CacheLedger()
     features = _features()
 
@@ -52,7 +52,7 @@ def test_predict_credits_full_observed_cache_not_just_prefix() -> None:
     system+tools prefix. predict() must surface the observed cache size (bounded by the
     request's total input), not clamp it back down to estimated_cacheable_prefix_tokens."""
     config = _config()
-    model = config.resolve_model("claude-sonnet-4.6")
+    model = config.resolve_model("claude-sonnet-5")
     ledger = CacheLedger()
     features = RequestCostFeatures(
         session_id="session-1",
@@ -85,7 +85,7 @@ def test_best_effort_creation_without_read_is_not_predicted_warm() -> None:
 
 def test_expected_output_tracks_observed_outputs() -> None:
     config = _config()
-    model = config.resolve_model("claude-sonnet-4.6")
+    model = config.resolve_model("claude-sonnet-5")
     ledger = CacheLedger()
     features = _features()
 
@@ -100,7 +100,7 @@ def test_expected_output_tracks_observed_outputs() -> None:
 
 def test_background_calls_do_not_move_output_estimate() -> None:
     config = _config()
-    model = config.resolve_model("claude-sonnet-4.6")
+    model = config.resolve_model("claude-sonnet-5")
     ledger = CacheLedger()
     features = _features()
 
@@ -198,7 +198,7 @@ def test_prefix_hash_ignores_conversation_content() -> None:
 
 def test_no_session_does_not_cross_pollinate_cache_state() -> None:
     config = _config()
-    model = config.resolve_model("claude-sonnet-4.6")
+    model = config.resolve_model("claude-sonnet-5")
     ledger = CacheLedger()
     features = _features(session_id=None)
 
@@ -213,7 +213,7 @@ def test_zero_cache_observation_clears_previous_prediction() -> None:
     # REAL evidence of a gone cache: a successful response (input/output tokens
     # present) that reports zero cache tokens.
     config = _config()
-    model = config.resolve_model("claude-sonnet-4.6")
+    model = config.resolve_model("claude-sonnet-5")
     ledger = CacheLedger()
     features = _features()
 
@@ -232,7 +232,7 @@ def test_compact_shrink_replaces_ratcheted_cache_size() -> None:
     # The entry must follow the LATEST observation — keeping the old 150k figure would
     # credit a cache that no longer matches this prefix.
     config = _config()
-    model = config.resolve_model("claude-sonnet-4.6")
+    model = config.resolve_model("claude-sonnet-5")
     ledger = CacheLedger()
     features = _features()
 
@@ -267,7 +267,7 @@ def test_observed_at_anchors_ttl_at_request_start() -> None:
     import time
 
     config = _config()
-    model = config.resolve_model("claude-sonnet-4.6")
+    model = config.resolve_model("claude-sonnet-5")
     ledger = CacheLedger()
     features = _features()
 
@@ -289,7 +289,7 @@ def test_expired_entries_are_swept_on_observe() -> None:
     import time
 
     config = _config()
-    model = config.resolve_model("claude-sonnet-4.6")
+    model = config.resolve_model("claude-sonnet-5")
     ledger = CacheLedger()
     stale = time.time() - 3600
     for index in range(300):
@@ -317,7 +317,7 @@ def test_error_shaped_all_zero_usage_does_not_wipe_warm_entry() -> None:
     # That is NO evidence about the provider-side cache — a transient error must not
     # wipe warm state and trigger a pointless model switch on the next turn.
     config = _config()
-    model = config.resolve_model("claude-sonnet-4.6")
+    model = config.resolve_model("claude-sonnet-5")
     ledger = CacheLedger()
     features = _features()
 

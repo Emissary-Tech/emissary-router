@@ -170,7 +170,7 @@ def test_strip_cch_attribution_from_system_text() -> None:
 
 
 def test_model_thinking_capabilities_expose_max_effort() -> None:
-    assert max_effort_for_model("claude-sonnet-4.6") == "max"
+    assert max_effort_for_model("claude-sonnet-5") == "max"
     assert max_effort_for_model("gemini-3.1-flash-lite") == "high"
     assert max_effort_for_model("unknown-model") == "high"
 
@@ -199,14 +199,11 @@ def test_sonnet_adaptive_thinking_is_preserved_and_effort_is_clamped() -> None:
         "reasoning_effort": "xhigh",
     }
 
-    changes = normalize_anthropic_thinking_for_model(body, "claude-sonnet-4.6")
+    changes = normalize_anthropic_thinking_for_model(body, "claude-sonnet-5")
 
-    assert body["thinking"] == {"type": "adaptive", "effort": "max"}
-    assert body["reasoning_effort"] == "max"
-    assert changes == [
-        "thinking.effort=xhigh->max",
-        "reasoning_effort=xhigh->max",
-    ]
+    assert body["thinking"] == {"type": "adaptive", "effort": "xhigh"}  # xhigh is native on sonnet-5
+    assert body["reasoning_effort"] == "xhigh"
+    assert changes == []  # nothing to rewrite — xhigh is in sonnet-5's vocabulary
 
 
 def test_anthropic_provider_sanitizes_haiku_adaptive_before_send(monkeypatch) -> None:
@@ -329,7 +326,7 @@ def test_strip_sanitizes_foreign_tool_ids_and_keeps_pairing() -> None:
 # --- Sonnet 5-era xhigh effort: served Claude models must get a level they accept ---
 
 
-def test_xhigh_effort_clamps_to_max_for_sonnet_and_drops_for_haiku() -> None:
+def test_xhigh_effort_passes_through_on_sonnet5_and_drops_for_haiku() -> None:
     from emissary_router.providers.thinking import normalize_anthropic_thinking_for_model
 
     def sonnet5_body() -> dict:
@@ -342,13 +339,15 @@ def test_xhigh_effort_clamps_to_max_for_sonnet_and_drops_for_haiku() -> None:
             "messages": [{"role": "user", "content": "hi"}],
         }
 
-    # sonnet-4.6 rejects xhigh outright (live 400: "This model does not support
-    # effort level 'xhigh'. Supported levels: high, low, max, medium") -> clamp to max.
+    # Historical note: sonnet-4.6 rejected xhigh outright (live 400: "This model does
+    # not support effort level 'xhigh'. Supported levels: high, low, max, medium") and
+    # needed the xhigh->max clamp. sonnet-5 supports the full ladder incl. xhigh, so
+    # the value passes through untouched.
     body = sonnet5_body()
-    changes = normalize_anthropic_thinking_for_model(body, "claude-sonnet-4.6")
-    assert body["output_config"]["effort"] == "max"
+    changes = normalize_anthropic_thinking_for_model(body, "claude-sonnet-5")
+    assert body["output_config"]["effort"] == "xhigh"
     assert body["thinking"] == {"type": "adaptive"}  # adaptive is supported; keep it
-    assert "output_config.effort=xhigh->max" in changes
+    assert changes == []  # no rewrite recorded — xhigh passes through
 
     # haiku accepts neither adaptive nor effort -> budget conversion + drop.
     body = sonnet5_body()

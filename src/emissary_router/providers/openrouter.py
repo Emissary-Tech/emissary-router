@@ -18,10 +18,17 @@ from emissary_router.providers.thinking import (
     accepts_effort_for_model,
     can_disable_thinking_for_model,
     extract_reasoning_settings,
-    max_effort_for_model,
-    normalize_effort,
+    resolve_effort_for_model,
     thinking_budget_from_max_tokens,
 )
+
+# OpenRouter's reasoning.effort enum tops out at xhigh — "max" is INVALID there.
+# (max itself is real on NATIVE surfaces: Anthropic claude-5 and OpenAI gpt-5.6
+# both define it; OpenRouter's unified enum just doesn't.) The per-model vocabulary
+# is resolved first (resolve_effort_for_model); this cap then snaps anything above
+# the provider's ceiling. OpenRouter itself maps unsupported levels to the nearest
+# one a model accepts, so no finer per-model mapping is needed on our side.
+_OPENROUTER_MAX_EFFORT = "xhigh"
 
 
 logger = logging.getLogger(__name__)
@@ -698,8 +705,8 @@ class OpenRouterProvider:
         elif settings.effort is not None and not accepts_effort_for_model(model_name):
             reasoning["max_tokens"] = thinking_budget_from_max_tokens(body)
         elif settings.effort is not None:
-            effort = normalize_effort(settings.effort, max_effort_for_model(model_name))
-            reasoning["effort"] = "xhigh" if effort == "max" else effort
+            effort = resolve_effort_for_model(settings.effort, model_name)
+            reasoning["effort"] = _OPENROUTER_MAX_EFFORT if effort == "max" else effort
         elif settings.max_tokens is not None:
             reasoning["max_tokens"] = settings.max_tokens
         elif settings.enabled:

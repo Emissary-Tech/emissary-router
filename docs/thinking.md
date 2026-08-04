@@ -17,9 +17,11 @@ The router normalizes per served model:
 - Anthropic Haiku: budget-only (rejects effort/adaptive). Adaptive/effort requests
   become `thinking: {type: enabled, budget_tokens: max_tokens - 1}`.
 - OpenRouter Claude: same intent, expressed in OpenRouter's `reasoning` shape.
-  Anthropic's `max` effort maps to OpenRouter's `xhigh` (the vocabularies differ —
-  Anthropic's top is `max`, OpenRouter's is `xhigh`). Budget-only models receive
-  `reasoning.max_tokens`.
+  Effort resolves through the served model's own vocabulary first (each model's
+  `supported_efforts`), then snaps to OpenRouter's ceiling: its enum tops out at
+  `xhigh`. (`max` is a real tier on native surfaces — Anthropic claude-5 and
+  OpenAI gpt-5.6 both define it — but OpenRouter's unified enum does not, so it is
+  invalid there.) Budget-only models receive `reasoning.max_tokens`.
 - Gemini via OpenRouter: uses OpenRouter's reasoning shape.
 
 This normalization only touches thinking fields; it never rewrites the cacheable

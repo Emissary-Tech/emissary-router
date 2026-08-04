@@ -24,13 +24,13 @@ class _PartialClassifier:
     """Returns probabilities missing a label required by config."""
 
     async def predict(self, _input):
-        return {"claude-sonnet-4.6": 0.9}  # missing gemini-3.1-flash-lite
+        return {"claude-sonnet-5": 0.9}  # missing gemini-3.1-flash-lite
 
 
 class _ConfidentHaikuClassifier:
     async def predict(self, _input):
         return {
-            "claude-sonnet-4.6": 0.1,
+            "claude-sonnet-5": 0.1,
             "claude-haiku-4.5": 0.95,
             "gemini-3.1-flash-lite": 0.1,
         }
@@ -51,8 +51,8 @@ class _FakeProvider:
 def _config():
     return AppConfig.model_validate(
         {
-            "models": {"claude-sonnet-4.6": True, "gemini-3.1-flash-lite": True},
-            "default": "claude-sonnet-4.6",
+            "models": {"claude-sonnet-5": True, "gemini-3.1-flash-lite": True},
+            "default": "claude-sonnet-5",
         }
     )
 
@@ -61,11 +61,11 @@ def _config_with_haiku():
     return AppConfig.model_validate(
         {
             "models": {
-                "claude-sonnet-4.6": True,
+                "claude-sonnet-5": True,
                 "claude-haiku-4.5": True,
                 "gemini-3.1-flash-lite": False,
             },
-            "default": "claude-sonnet-4.6",
+            "default": "claude-sonnet-5",
         }
     )
 
@@ -86,10 +86,10 @@ def test_classifier_failure_falls_back_to_default(tmp_path):
         )
     )
     assert resp.status_code == 200
-    assert [m.name for m in fake.calls] == ["claude-sonnet-4.6"]
+    assert [m.name for m in fake.calls] == ["claude-sonnet-5"]
     rows = store.list_events()
     assert len(rows) == 1
-    assert rows[0]["served_model"] == "claude-sonnet-4.6"
+    assert rows[0]["served_model"] == "claude-sonnet-5"
     assert rows[0]["route_reason"] == "fallback: router_issue"
     assert rows[0]["session_id"] == "s1"
 
@@ -129,7 +129,7 @@ def test_pipeline_passes_cache_state_to_routing(tmp_path):
     headers = {"x-claude-code-session-id": "s1"}
     features = extract_request_cost_features(body, headers)
     pipe._cache_ledger.observe(
-        config.resolve_model("claude-sonnet-4.6"),
+        config.resolve_model("claude-sonnet-5"),
         features,
         Usage(cache_creation_input_tokens=30000),
     )
@@ -137,7 +137,7 @@ def test_pipeline_passes_cache_state_to_routing(tmp_path):
     resp = asyncio.run(pipe.handle_messages(body, headers))
 
     assert resp.status_code == 200
-    assert [m.name for m in fake.calls] == ["claude-sonnet-4.6"]
+    assert [m.name for m in fake.calls] == ["claude-sonnet-5"]
     rows = store.list_events()
     # Haiku was confident, but the warm sonnet cache made the default cheaper after cache.
     assert rows[0]["route_reason"] == "cache_aware:warm_default_cheaper"

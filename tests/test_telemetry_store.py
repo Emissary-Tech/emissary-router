@@ -12,7 +12,7 @@ def _rec(store_id: str, **over) -> EventRecord:
         ts=time.time(),
         session_id="s1",
         call_kind="main",
-        requested_model="claude-sonnet-4-6",
+        requested_model="claude-sonnet-5",
         served_model="claude-haiku-4.5",
         provider="anthropic",
         model_id="claude-haiku-4-5",
@@ -53,7 +53,7 @@ def test_sessions_group_by_session(tmp_path):
     store = SqliteStore(tmp_path / "e.sqlite3")
     store.write(_rec("a", session_id="s1", call_kind="main", served_model="claude-haiku-4.5", cost_usd=0.001))
     store.write(_rec("b", session_id="s1", call_kind="background", served_model="gemini-3.1-flash-lite", cost_usd=0.0))
-    store.write(_rec("c", session_id="s2", call_kind="main", served_model="claude-sonnet-4.6", cost_usd=0.01))
+    store.write(_rec("c", session_id="s2", call_kind="main", served_model="claude-sonnet-5", cost_usd=0.01))
 
     sessions = store.sessions()
     assert len(sessions) == 2

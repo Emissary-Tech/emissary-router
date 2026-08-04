@@ -254,7 +254,9 @@ class AppConfig(BaseModel):
         # Ordered cheap -> expensive by price, derived from the catalog (not dict order),
         # which is the order the routing policy scans.
         names = [name for name in CATALOG if name in self.models and self.models[name].enabled]
-        return sorted(names, key=lambda name: cost_score(CATALOG[name]))
+        # Name tie-break: equal-priced models (sonnet-5 / kimi-k3 both
+        # blend to 18.0) must scan in a deterministic order, not dict order.
+        return sorted(names, key=lambda name: (cost_score(CATALOG[name]), name))
 
     def resolve_model(self, name: str) -> ResolvedModel:
         spec = CATALOG[name]

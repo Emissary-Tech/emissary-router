@@ -10,11 +10,11 @@ from emissary_router.telemetry import SqliteStore
 
 CONFIG = {
     "models": {
-        "claude-sonnet-4.6": True,
+        "claude-sonnet-5": True,
         "claude-haiku-4.5": True,
         "gemini-3.1-flash-lite": True,
     },
-    "default": "claude-sonnet-4.6",
+    "default": "claude-sonnet-5",
     "confidence": 0.8,
 }
 
@@ -26,7 +26,7 @@ def _client(tmp_path, on_config_change=None):
     app = FastAPI()
     app.include_router(
         build_dashboard_router(
-            store, "claude-sonnet-4.6", config_path=cfg, on_config_change=on_config_change
+            store, "claude-sonnet-5", config_path=cfg, on_config_change=on_config_change
         )
     )
     return TestClient(app), cfg
@@ -35,13 +35,13 @@ def _client(tmp_path, on_config_change=None):
 def test_get_config_lists_catalog_cheap_first(tmp_path):
     client, _ = _client(tmp_path)
     body = client.get("/api/config").json()
-    assert body["default"] == "claude-sonnet-4.6"
+    assert body["default"] == "claude-sonnet-5"
     assert body["confidence"] == 0.8
-    assert [m["name"] for m in body["models"]][0] == "gemini-3.1-flash-lite"
+    assert [m["name"] for m in body["models"]][0] == "deepseek-v4-flash"
     enabled = {m["name"]: m["enabled"] for m in body["models"]}
     # The three configured models are enabled; catalog-only models (not in this config)
     # show up disabled and toggleable.
-    assert enabled["claude-sonnet-4.6"] is True
+    assert enabled["claude-sonnet-5"] is True
     assert enabled["claude-haiku-4.5"] is True
     assert enabled["gemini-3.1-flash-lite"] is True
     assert enabled["glm-5.2"] is False
@@ -54,11 +54,11 @@ def test_put_config_toggles_and_persists(tmp_path):
         "/api/config",
         json={
             "models": {
-                "claude-sonnet-4.6": True,
+                "claude-sonnet-5": True,
                 "claude-haiku-4.5": False,
                 "gemini-3.1-flash-lite": True,
             },
-            "default": "claude-sonnet-4.6",
+            "default": "claude-sonnet-5",
             "confidence": 0.6,
         },
     )
@@ -88,11 +88,11 @@ def test_put_provider_override_persists(tmp_path):
         "/api/config",
         json={
             "models": {
-                "claude-sonnet-4.6": {"enabled": True},
+                "claude-sonnet-5": {"enabled": True},
                 "claude-haiku-4.5": {"enabled": True, "provider": "openrouter"},
                 "gemini-3.1-flash-lite": {"enabled": True},
             },
-            "default": "claude-sonnet-4.6",
+            "default": "claude-sonnet-5",
         },
     )
     assert resp.status_code == 200
@@ -128,14 +128,14 @@ def test_put_config_rejects_disabling_default(tmp_path):
         "/api/config",
         json={
             "models": {
-                "claude-sonnet-4.6": False,
+                "claude-sonnet-5": False,
                 "claude-haiku-4.5": True,
                 "gemini-3.1-flash-lite": True,
             },
-            "default": "claude-sonnet-4.6",
+            "default": "claude-sonnet-5",
         },
     )
     assert resp.status_code == 400
     assert "error" in resp.json()
     # file left untouched on invalid input
-    assert json.loads(cfg.read_text())["models"]["claude-sonnet-4.6"] is True
+    assert json.loads(cfg.read_text())["models"]["claude-sonnet-5"] is True

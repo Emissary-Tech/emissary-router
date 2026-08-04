@@ -4,7 +4,9 @@ from dataclasses import dataclass
 from typing import Any
 
 
-EFFORT_ORDER = ["none", "minimal", "low", "medium", "high", "max", "xhigh"]
+# Anthropic's documented ladder: max is the TOP tier ("absolute highest capability"),
+# above xhigh. OpenRouter's own top remains xhigh — its sender maps max->xhigh.
+EFFORT_ORDER = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 SUPPORTED_THINKING_TYPES = {"enabled", "disabled"}
 DEFAULT_MAX_THINKING_BUDGET = 32000
 EFFORT_KEYS = {"effort", "reasoning_effort", "thinking_effort"}
@@ -26,14 +28,13 @@ class ModelThinkingCapabilities:
     # Some models always reason and reject a disable request (OpenRouter returns 400
     # "Reasoning is mandatory ... cannot be disabled"). For those, never emit effort:none.
     can_disable_thinking: bool = True
+    # The exact effort vocabulary when it has holes a linear clamp can't express
+    # (e.g. gpt-5.6 supports none but NOT minimal).
+    # None = every rung up to max_effort is fine.
+    supported_efforts: tuple[str, ...] | None = None
 
 
 THINKING_CAPABILITIES = {
-    "claude-sonnet-4.6": ModelThinkingCapabilities(
-        accepts_effort_param=True,
-        accepts_adaptive_thinking=True,
-        max_effort="max",
-    ),
     "claude-haiku-4.5": ModelThinkingCapabilities(
         accepts_effort_param=False,
         accepts_adaptive_thinking=False,
@@ -63,7 +64,79 @@ THINKING_CAPABILITIES = {
         max_effort="xhigh",
         can_disable_thinking=False,
     ),
+    # claude-5 series: adaptive thinking IS the provider default (omitting `thinking`
+    # runs adaptive) and effort is a separate knob defaulting to high. Same
+    # claude-5: full ladder low/medium/high (default) /xhigh/max. NOTE: with thinking
+    # DISABLED, effort is capped at high (xhigh/max + disabled -> 400) — the anthropic
+    # normalizer enforces that cap.
+    "claude-sonnet-5": ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=True,
+        max_effort="max",
+        supported_efforts=("low", "medium", "high", "xhigh", "max"),
+    ),
+    "claude-opus-5": ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=True,
+        max_effort="max",
+        supported_efforts=("low", "medium", "high", "xhigh", "max"),
+    ),
+    # DeepSeek V4 Flash (OpenRouter): hybrid thinking — reasons via OpenRouter's
+    # effort->budget translation and accepts a disable (non-thinking mode). Verify
+    # live before serving at scale.
+    "deepseek-v4-flash": ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=False,
+        max_effort="xhigh",
+    ),
+    # gpt-5.6 series (OpenAI Responses API): reasoning is the provider default;
+    # effort vocabulary none/low/medium/high/xhigh/max — "minimal" does NOT exist
+    # (snaps to low), and "none" does, so thinking can be disabled.
+    "gpt-5.6-sol": ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=False,
+        max_effort="max",
+        supported_efforts=("none", "low", "medium", "high", "xhigh", "max"),
+    ),
+    "gpt-5.6-terra": ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=False,
+        max_effort="max",
+        supported_efforts=("none", "low", "medium", "high", "xhigh", "max"),
+    ),
+    "gpt-5.6-luna": ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=False,
+        max_effort="max",
+        supported_efforts=("none", "low", "medium", "high", "xhigh", "max"),
+    ),
+    # Assumed to behave like kimi-k2.7 (always reasons via OpenRouter's effort param;
+    # disable requests omit the reasoning field). Label runs used provider-default
+    # reasoning; verify live before serving at scale.
+    "kimi-k3": ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=False,
+        max_effort="xhigh",
+        can_disable_thinking=False,
+    ),
 }
+
+
+# claude-5 models reject client sampling params (opus-5: any temperature/top_p;
+# sonnet-5: non-default values) — measured during the 2026-07-31 label runs. Dropping
+# the keys entirely is intent-preserving: the provider default takes over, which is
+# what Claude Code's temperature=1 means anyway.
+REJECTS_SAMPLING_PARAMS = {"claude-sonnet-5", "claude-opus-5"}
+
+
+def strip_unsupported_sampling_params(body: dict[str, Any], served_model: str) -> list[str]:
+    if served_model not in REJECTS_SAMPLING_PARAMS:
+        return []
+    changes: list[str] = []
+    for key in ("temperature", "top_p", "top_k"):
+        if key in body:
+            changes.append(f"{key}={body.pop(key)} dropped ({served_model})")
+    return changes
 
 
 @dataclass(frozen=True)
@@ -120,6 +193,23 @@ def normalize_effort(effort: str | None, max_effort: str = "high") -> str | None
     return effort if EFFORT_ORDER.index(effort) <= EFFORT_ORDER.index(max_effort) else max_effort
 
 
+def resolve_effort_for_model(effort: str | None, model_name: str, default_max: str = "high") -> str | None:
+    """Clamp to the model's max, then snap into its exact vocabulary.
+
+    Unsupported rungs move to the nearest supported one (ties resolve upward, so an
+    an unsupported "minimal" on gpt-5.6 becomes low; ties resolve upward to preserve
+    "think harder" intent rather than silently downgrading)."""
+    if effort is None:
+        return None
+    capabilities = THINKING_CAPABILITIES.get(model_name)
+    effort = normalize_effort(effort, max_effort_for_model(model_name, default_max))
+    supported = capabilities.supported_efforts if capabilities else None
+    if not supported or effort in supported:
+        return effort
+    rank = EFFORT_ORDER.index(effort)
+    return min(supported, key=lambda e: (abs(EFFORT_ORDER.index(e) - rank), -EFFORT_ORDER.index(e)))
+
+
 def max_effort_for_model(model_name: str, default: str = "high") -> str:
     capabilities = THINKING_CAPABILITIES.get(model_name)
     return capabilities.max_effort if capabilities and capabilities.max_effort else default
@@ -167,6 +257,10 @@ def normalize_anthropic_thinking_for_model(
         return []
 
     changes: list[str] = []
+    thinking_field = body.get("thinking")
+    thinking_disabled = (
+        isinstance(thinking_field, dict) and thinking_field.get("type") == "disabled"
+    )
 
     def walk(value: Any, path: str = "") -> None:
         if isinstance(value, dict):
@@ -194,7 +288,11 @@ def normalize_anthropic_thinking_for_model(
                         del value[key]
                         changes.append(f"{child_path}={item} dropped")
                     else:
-                        clamped = normalize_effort(item, capabilities.max_effort or item)
+                        clamped = resolve_effort_for_model(item, served_model)
+                        # With thinking disabled, Anthropic rejects xhigh/max
+                        # (effort is capped at high).
+                        if thinking_disabled and clamped in ("xhigh", "max"):
+                            clamped = "high"
                         if clamped != item:
                             value[key] = clamped
                             changes.append(f"{child_path}={item}->{clamped}")

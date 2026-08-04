@@ -10,7 +10,7 @@ Prices are USD per 1M tokens.
 |---|---|---|---|---|
 | `gemini-3.1-flash-lite` | 0.25 | 1.50 | 0.025 | 0.25 |
 | `claude-haiku-4.5` | 1.00 | 5.00 | 0.10 | 1.25 |
-| `claude-sonnet-4.6` | 3.00 | 15.00 | 0.30 | 3.75 |
+| `claude-sonnet-5` | 3.00 | 15.00 | 0.30 | 3.75 |
 
 These prices are used for the `cost_usd` estimate in [telemetry](telemetry.md),
 computed from each call's actual token usage:

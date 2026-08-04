@@ -11,11 +11,11 @@ def test_health_reflects_live_default_after_config_change(tmp_path, monkeypatch)
         json.dumps(
             {
                 "models": {
-                    "claude-sonnet-4.6": True,
+                    "claude-sonnet-5": True,
                     "claude-haiku-4.5": True,
                     "gemini-3.1-flash-lite": True,
                 },
-                "default": "claude-sonnet-4.6",
+                "default": "claude-sonnet-5",
                 "confidence": 0.8,
                 "telemetry": {"enabled": True, "db_path": str(tmp_path / "e.sqlite3")},
             }
@@ -27,7 +27,7 @@ def test_health_reflects_live_default_after_config_change(tmp_path, monkeypatch)
     from emissary_router.server import create_app
 
     client = TestClient(create_app())
-    assert client.get("/").json()["default"] == "claude-sonnet-4.6"
+    assert client.get("/").json()["default"] == "claude-sonnet-5"
 
     # change the default via the dashboard -> reload -> health must reflect it (not stale)
     resp = client.put("/api/config", json={"default": "claude-haiku-4.5"})
@@ -41,11 +41,11 @@ def test_cache_ledger_survives_config_reload(tmp_path, monkeypatch):
         json.dumps(
             {
                 "models": {
-                    "claude-sonnet-4.6": True,
+                    "claude-sonnet-5": True,
                     "claude-haiku-4.5": True,
                     "gemini-3.1-flash-lite": True,
                 },
-                "default": "claude-sonnet-4.6",
+                "default": "claude-sonnet-5",
                 "confidence": 0.8,
                 "telemetry": {"enabled": True, "db_path": str(tmp_path / "e.sqlite3")},
             }
@@ -62,7 +62,7 @@ def test_cache_ledger_survives_config_reload(tmp_path, monkeypatch):
     client = TestClient(app)
 
     ledger_before = app.state.pipeline.cache_ledger
-    model = app.state.config.resolve_model("claude-sonnet-4.6")
+    model = app.state.config.resolve_model("claude-sonnet-5")
     feats = RequestCostFeatures("s1", "h", 12000, 10000, 2000, 1024)
     ledger_before.observe(model, feats, Usage(output_tokens=2000, cache_creation_input_tokens=10000))
     assert ledger_before.predict(model, feats).warm is True

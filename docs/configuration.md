@@ -19,13 +19,13 @@ This is the full shipped config. Everything not shown uses defaults.
 ```json
 {
   "models": {
-    "claude-sonnet-4.6": { "enabled": true, "provider": "anthropic" },
+    "claude-sonnet-5": { "enabled": true, "provider": "anthropic" },
     "claude-haiku-4.5": { "enabled": true, "provider": "anthropic" },
     "gemini-3.1-flash-lite": { "enabled": true, "provider": "openrouter" },
     "glm-5.2": { "enabled": true, "provider": "openrouter" },
     "kimi-k2.7-code": { "enabled": true, "provider": "openrouter" }
   },
-  "default": "claude-sonnet-4.6",
+  "default": "claude-sonnet-5",
   "confidence": 0.8,
   "router": { "router_model": "emissary-model-router-shared" },
   "server": { "port": 8788 },
@@ -64,7 +64,7 @@ reordering the catalog can't change routing. Cheapest → most expensive today:
 2. `glm-5.2`
 3. `kimi-k2.7-code`
 4. `claude-haiku-4.5`
-5. `claude-sonnet-4.6`
+5. `claude-sonnet-5`
 
 #### Choosing a provider
 
@@ -74,7 +74,7 @@ only how the request is delivered changes.
 
 | Model                   | Providers (recommended first) |
 | ----------------------- | ----------------------------- |
-| `claude-sonnet-4.6`     | `anthropic`, `openrouter`     |
+| `claude-sonnet-5`       | `anthropic`, `openrouter`     |
 | `claude-haiku-4.5`      | `anthropic`, `openrouter`     |
 | `gemini-3.1-flash-lite` | `openrouter`, `google`        |
 | `glm-5.2`               | `openrouter`, `zai`           |
@@ -105,7 +105,7 @@ models through it too:
 
 ```json
 "models": {
-  "claude-sonnet-4.6": { "enabled": true, "provider": "openrouter" },
+  "claude-sonnet-5": { "enabled": true, "provider": "openrouter" },
   "claude-haiku-4.5": { "enabled": true, "provider": "openrouter" },
   "gemini-3.1-flash-lite": { "enabled": true, "provider": "openrouter" }
 }
@@ -183,7 +183,7 @@ Routing is confidence-gated and cache-aware by default:
    per-request cost**: a model that is still warm for the session is credited its
    observed cache reads (the cheap cache-read rate), while switching to a cold model is
    priced at full input plus a cache write. The cheapest wins; the default stays unless
-   a candidate is strictly cheaper *after* cache effects.
+   a candidate is strictly cheaper _after_ cache effects.
 
 Context limits are deliberately not a routing input: a request that exceeds the
 served model's window surfaces as a normalized `prompt is too long` 400 and the

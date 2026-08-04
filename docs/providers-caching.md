@@ -5,7 +5,7 @@ by the catalog, not your config.
 
 | Model | Provider | Upstream model id | Context window |
 |---|---|---|---|
-| `claude-sonnet-4.6` | Anthropic | `claude-sonnet-4-6` | 200K (1M with the `context-1m` beta) |
+| `claude-sonnet-5` | Anthropic | `claude-sonnet-5` | 200K (1M with the `context-1m` beta) |
 | `claude-haiku-4.5` | Anthropic | `claude-haiku-4-5` | 200K |
 | `gemini-3.1-flash-lite` | OpenRouter (default) or Google native | `google/gemini-3.1-flash-lite` / `gemini-3.1-flash-lite` | 1M |
 | `glm-5.2` | OpenRouter (default) or Z.ai native | `z-ai/glm-5.2` / `glm-5.2` | 1M |
@@ -121,7 +121,7 @@ reports them.
 
 | Model | anthropic | openrouter | zai | google |
 |---|---|---|---|---|
-| `claude-sonnet-4.6` | ✅ explicit prompt cache | ✅ Anthropic cache accounting via OpenRouter | — | — |
+| `claude-sonnet-5` | ✅ explicit prompt cache | ✅ Anthropic cache accounting via OpenRouter | — | — |
 | `claude-haiku-4.5` | ✅ explicit prompt cache | ✅ Anthropic cache accounting via OpenRouter | — | — |
 | `gemini-3.1-flash-lite` | — | ⚠️ implicit, per-host | — | ⚠️ implicit, single host — reads land (measured; partial-fragment credits) |
 | `glm-5.2` | — | ⚠️ implicit, per-host | ⚠️ implicit, single host — reads land reliably (measured) | — |

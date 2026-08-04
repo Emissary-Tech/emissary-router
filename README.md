@@ -74,24 +74,39 @@ Toggle models in `~/.emissary-router/config.json`:
 ```json
 {
   "models": {
-    "claude-sonnet-4.6": { "enabled": true, "provider": "anthropic" },
-    "claude-haiku-4.5": { "enabled": true, "provider": "anthropic" },
+    "deepseek-v4-flash": { "enabled": true, "provider": "openrouter" },
+    "gpt-5.6-luna": { "enabled": true, "provider": "openai" },
     "gemini-3.1-flash-lite": { "enabled": true, "provider": "openrouter" },
     "glm-5.2": { "enabled": true, "provider": "openrouter" },
-    "kimi-k2.7-code": { "enabled": true, "provider": "openrouter" }
+    "kimi-k2.7-code": { "enabled": true, "provider": "openrouter" },
+    "claude-haiku-4.5": { "enabled": true, "provider": "anthropic" },
+    "claude-sonnet-5": { "enabled": true, "provider": "anthropic" },
+    "claude-opus-5": { "enabled": true, "provider": "anthropic" },
+    "kimi-k3": { "enabled": false, "provider": "openrouter" }
   },
-  "default": "claude-sonnet-4.6",
+  "default": "claude-sonnet-5",
   "confidence": 0.8
 }
 ```
 
 Built-in models:
 
-- `claude-sonnet-4.6` — Anthropic or OpenRouter
+- `deepseek-v4-flash` — OpenRouter (the router's cost anchor; deliberately the BASE
+  model id, not `-latest`/`-0731`)
+- `gpt-5.6-luna` — OpenAI (native **Responses API**; cheapest model in the catalog,
+  strong math/knowledge and top-tier abstention; reasoning is the provider default)
+- `gpt-5.6-terra` / `gpt-5.6-sol` — OpenAI Responses API (disabled by default —
+  dominated in the router-level ablation; enable per-config)
+- `claude-sonnet-5` — Anthropic or OpenRouter (default; adaptive thinking is the
+  provider default, and the router strips client `temperature`/`top_p` — the claude-5
+  series rejects them)
+- `claude-opus-5` — Anthropic or OpenRouter (escalation-grade premium; same claude-5
+  sampling-param handling)
 - `claude-haiku-4.5` — Anthropic or OpenRouter
 - `gemini-3.1-flash-lite` — OpenRouter
 - `glm-5.2` — OpenRouter
 - `kimi-k2.7-code` — OpenRouter (always reasons; thinking can't be disabled)
+- `kimi-k3` — OpenRouter (disabled by default — enable per-config for baselines/benchmarks)
 
 Set `enabled: false` to drop a model, and `provider` to choose how it's served.
 Users cannot add arbitrary upstream models in V1; model id and pricing are owned by
