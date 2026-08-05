@@ -129,7 +129,8 @@ class OpenAIProvider:
         request: dict[str, Any] = {
             "model": model_id,
             "input": cls._input_items(body),
-            "max_output_tokens": body.get("max_tokens", 4096),
+            # omit when absent — same parity rule as the OpenRouter sender.
+            **({"max_output_tokens": body["max_tokens"]} if body.get("max_tokens") is not None else {}),
             "store": False,
             "stream": False,
         }

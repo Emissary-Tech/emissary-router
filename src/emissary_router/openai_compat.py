@@ -32,13 +32,12 @@ import uuid
 from starlette.responses import JSONResponse, Response
 
 SESSION_HEADER = "x-claude-code-session-id"
-# OpenAI clients may omit max_tokens entirely (the CPST harness does — its guardrail
-# is a cumulative per-episode token cap, not a per-call one), but the Anthropic format
-# requires the field. Use the roster-wide serving/label budget: adaptive thinking
-# spends inside this number, so a tight default (e.g. 8K) can truncate hard steps
-# mid-answer (finish_reason=length) and silently fail tasks. 32K is live-verified
-# through every provider in the catalog. Client-sent max_tokens still wins.
-DEFAULT_MAX_TOKENS = 64000
+# max_tokens policy: OpenAI clients may omit it (the CPST harness does), and native
+# provider calls without it run uncapped — so for parity this adapter does NOT invent
+# one. Absence flows through: the OpenAI/OpenRouter providers OMIT the field upstream
+# (their old hardcoded 4096 fallback was removed), and only the Anthropic provider
+# fills it (the native Messages schema requires the field) with 64000 — safe for
+# every roster Claude (opus-5/sonnet-5 max output 128K, haiku 64K). Client-sent max_tokens always passes through everywhere.
 
 _FINISH_REASON = {
     "end_turn": "stop",
@@ -126,12 +125,12 @@ def chat_to_messages(body: dict) -> dict:
 
     out: dict = {
         "model": body.get("model") or "router",
-        "max_tokens": body.get("max_tokens")
-        or body.get("max_completion_tokens")
-        or DEFAULT_MAX_TOKENS,
         "messages": messages,
         "stream": False,
     }
+    client_max = body.get("max_tokens") or body.get("max_completion_tokens")
+    if client_max:
+        out["max_tokens"] = client_max
     if system_blocks:
         out["system"] = system_blocks
     for knob in ("temperature", "top_p", "stop"):

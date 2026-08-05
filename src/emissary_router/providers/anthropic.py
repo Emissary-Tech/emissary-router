@@ -122,6 +122,13 @@ class AnthropicProvider:
         self._strip_cch_attribution(body)
         thinking_changes = normalize_anthropic_thinking_for_model(body, model.name)
         thinking_changes += strip_unsupported_sampling_params(body, model.name)
+        # The native Messages schema REQUIRES max_tokens; Claude Code always sends it,
+        # but OpenAI-compat clients may omit it (their protocol treats it as optional
+        # and native provider calls run uncapped). Fill only when absent — 64000 is
+        # safe for every roster Claude (official max output: opus-5/sonnet-5 128K,
+        # haiku-4.5 64K) and effectively non-binding for agent turns.
+        if body.get("max_tokens") is None:
+            body["max_tokens"] = 64000
         body["model"] = model.model_id
         headers = self._forward_headers(request.headers)
         if self._config.api_key and "x-api-key" not in {k.lower() for k in headers}:

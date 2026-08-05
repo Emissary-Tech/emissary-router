@@ -507,7 +507,9 @@ class OpenRouterProvider:
         request: dict[str, Any] = {
             "model": model_id,
             "messages": cls._messages(body),
-            "max_tokens": body.get("max_tokens", 4096),
+            # omit when the client omitted it (OpenAI-compat parity: an uncapped
+            # native call must stay uncapped through the router); CC always sends it.
+            **({"max_tokens": body["max_tokens"]} if body.get("max_tokens") is not None else {}),
             "stream": False,
         }
         if body.get("temperature") is not None:

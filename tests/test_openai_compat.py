@@ -54,7 +54,10 @@ def test_chat_to_messages_full_tool_loop() -> None:
     out = chat_to_messages(_agent_style_request())
 
     assert out["stream"] is False
-    assert out["max_tokens"] > 0
+    # parity: the harness omits max_tokens, so the translated body must too
+    # (providers omit it upstream; only the Anthropic sender fills its required field)
+    assert "max_tokens" not in out
+    assert chat_to_messages({**_agent_style_request(), "max_tokens": 512})["max_tokens"] == 512
     # system hoisted with a cache breakpoint
     assert out["system"][-1]["cache_control"] == {"type": "ephemeral"}
     # roles: user, assistant(tool_use), user(tool_result)
