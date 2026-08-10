@@ -16,7 +16,7 @@ def test_savings_vs_baseline():
             "cost_usd": 6.0,  # 1*1 + 1*5
         }
     ]
-    summary = compute_summary(aggregates, "claude-sonnet-4.6")
+    summary = compute_summary(aggregates, "claude-sonnet-5")
     assert summary["baseline_available"] is True
     assert summary["total_cost_usd"] == 6.0
     assert summary["baseline_cost_usd"] == 18.0  # 1*3 + 1*15

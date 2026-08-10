@@ -148,6 +148,8 @@ class ServerConfig(BaseModel):
 class CacheConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    # Deprecated no-op: the cch= line is now stripped unconditionally on every
+    # provider (current Claude Code no longer sends it at all).
     strip_dynamic_attribution: bool = True
 
 
@@ -214,6 +216,9 @@ class AppConfig(BaseModel):
     models: dict[str, ModelEntry]
     default: str
     confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+    # Deprecated no-op, accepted so configs written by older versions still load.
+    # Routing is cache-aware by default now (falling back to plain price order
+    # wherever there is no cache signal) — there is no policy to choose.
     policy: Literal["deviate_if_confident", "cache_aware"] = "deviate_if_confident"
     router: RouterConfig = Field(default_factory=RouterConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
@@ -258,7 +263,9 @@ class AppConfig(BaseModel):
         # Ordered cheap -> expensive by price, derived from the catalog (not dict order),
         # which is the order the routing policy scans.
         names = [name for name in CATALOG if name in self.models and self.models[name].enabled]
-        return sorted(names, key=lambda name: cost_score(CATALOG[name]))
+        # Name tie-break: equal-priced models (sonnet-5 / kimi-k3 both
+        # blend to 18.0) must scan in a deterministic order, not dict order.
+        return sorted(names, key=lambda name: (cost_score(CATALOG[name]), name))
 
     def resolve_model(self, name: str) -> ResolvedModel:
         spec = CATALOG[name]

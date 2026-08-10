@@ -18,32 +18,84 @@ from emissary_router.config import (
 def _config(**overrides) -> AppConfig:
     raw = {
         "models": {
-            "claude-sonnet-4.6": True,
+            "claude-sonnet-5": True,
             "claude-haiku-4.5": True,
             "gemini-3.1-flash-lite": True,
         },
-        "default": "claude-sonnet-4.6",
+        "default": "claude-sonnet-5",
         "confidence": 0.8,
     }
     raw.update(overrides)
     return AppConfig.model_validate(raw)
 
 
-def test_catalog_order_is_cheap_to_expensive() -> None:
-    assert list(CATALOG) == [
+def test_thinking_capabilities_cover_exactly_the_catalog() -> None:
+    # CATALOG and THINKING_CAPABILITIES are separate dicts keyed by model name, and a
+    # missing capabilities entry silently defaults to can_disable_thinking=True — which
+    # would 400 every background call routed to a forgotten always-on-reasoning model
+    # ("Reasoning is mandatory ... cannot be disabled"). Keep the key sets identical.
+    from emissary_router.providers.thinking import THINKING_CAPABILITIES
+
+    assert set(THINKING_CAPABILITIES) == set(CATALOG)
+
+
+def test_glm_and_kimi_are_openrouter_only_with_expected_pricing() -> None:
+    glm = CATALOG["glm-5.2"]
+    assert glm.providers == {"openrouter": "z-ai/glm-5.2", "zai": "glm-5.2"}
+    assert glm.default_provider == "openrouter"
+    # Z.ai official sheet (canonical by decision 2026-08-04): 1.40/4.40, cached 0.26.
+    assert (glm.pricing.input, glm.pricing.output, glm.pricing.cache_read) == (1.40, 4.40, 0.26)
+    # OpenRouter implicit caching: no write premium, so cache_write == input price.
+    assert glm.pricing.cache_write_5m == glm.pricing.input
+
+    kimi = CATALOG["kimi-k2.7-code"]
+    assert kimi.providers == {"openrouter": "moonshotai/kimi-k2.7-code"}
+    assert kimi.default_provider == "openrouter"
+    # Moonshot first-party endpoint price (canonical, 2026-08-04).
+    assert (kimi.pricing.input, kimi.pricing.output, kimi.pricing.cache_read) == (0.95, 4.00, 0.19)
+    assert kimi.pricing.cache_write_5m == kimi.pricing.input
+
+
+def test_glm_and_kimi_are_selectable_in_config() -> None:
+    config = _config(
+        models={
+            "claude-sonnet-5": True,
+            "glm-5.2": {"enabled": True, "provider": "openrouter"},
+            "kimi-k2.7-code": True,
+        },
+    )
+    assert "glm-5.2" in config.enabled_models()
+    assert config.resolve_model("kimi-k2.7-code").model_id == "moonshotai/kimi-k2.7-code"
+
+
+def test_catalog_contains_supported_models() -> None:
+    # Catalog insertion order is cosmetic: routing derives order from cost_score
+    # (see test_routing_order_is_by_price_not_dict_order), so assert membership, not order.
+    assert set(CATALOG) == {
+        "deepseek-v4-flash",
+        "gpt-5.6-luna",
         "gemini-3.1-flash-lite",
+        "kimi-k2.7-code",
+        "glm-5.2",
         "claude-haiku-4.5",
-        "claude-sonnet-4.6",
-    ]
+        "gpt-5.6-terra",
+        "claude-sonnet-5",
+        "kimi-k3",
+        "claude-opus-5",
+        "gpt-5.6-sol",
+    }
 
 
 def test_cost_score_orders_catalog_cheap_to_expensive() -> None:
     from emissary_router.catalog import cost_score
 
+    # At Z.ai official pricing glm blends to 5.80 — above kimi-2.7 (4.24), below haiku.
     assert (
         cost_score(CATALOG["gemini-3.1-flash-lite"])
+        < cost_score(CATALOG["kimi-k2.7-code"])
+        < cost_score(CATALOG["glm-5.2"])
         < cost_score(CATALOG["claude-haiku-4.5"])
-        < cost_score(CATALOG["claude-sonnet-4.6"])
+        < cost_score(CATALOG["claude-sonnet-5"])
     )
 
 
@@ -56,36 +108,45 @@ def test_routing_order_is_by_price_not_dict_order(monkeypatch: pytest.MonkeyPatc
 
     config = _config(models={name: True for name in reordered})
     assert config.enabled_models() == [
+        "deepseek-v4-flash",
+        "gpt-5.6-luna",
         "gemini-3.1-flash-lite",
+        "kimi-k2.7-code",
+        "glm-5.2",
         "claude-haiku-4.5",
-        "claude-sonnet-4.6",
+        "gpt-5.6-terra",
+        # 18.0 blended tie (sonnet-5 / kimi-k3) -> deterministic name tie-break
+        "claude-sonnet-5",
+        "kimi-k3",
+        "claude-opus-5",
+        "gpt-5.6-sol",
     ]
 
 
 def test_enabled_models_follow_catalog_order() -> None:
     config = _config(
         models={
-            "claude-sonnet-4.6": True,
+            "claude-sonnet-5": True,
             "claude-haiku-4.5": False,
             "gemini-3.1-flash-lite": True,
         }
     )
 
-    assert config.enabled_models() == ["gemini-3.1-flash-lite", "claude-sonnet-4.6"]
+    assert config.enabled_models() == ["gemini-3.1-flash-lite", "claude-sonnet-5"]
     assert config.resolve_model("gemini-3.1-flash-lite").provider == "openrouter"
 
 
 def test_model_value_true_uses_default_provider() -> None:
     config = _config()
-    sonnet = config.resolve_model("claude-sonnet-4.6")
+    sonnet = config.resolve_model("claude-sonnet-5")
     assert sonnet.provider == "anthropic"
-    assert sonnet.model_id == "claude-sonnet-4-6"
+    assert sonnet.model_id == "claude-sonnet-5"
 
 
 def test_model_value_provider_overrides_transport() -> None:
     config = _config(
         models={
-            "claude-sonnet-4.6": True,
+            "claude-sonnet-5": True,
             "claude-haiku-4.5": "openrouter",
             "gemini-3.1-flash-lite": True,
         }
@@ -99,7 +160,7 @@ def test_provider_override_changes_required_env() -> None:
     # All Claude routed through OpenRouter -> only the OpenRouter key is required.
     config = _config(
         models={
-            "claude-sonnet-4.6": "openrouter",
+            "claude-sonnet-5": "openrouter",
             "claude-haiku-4.5": "openrouter",
             "gemini-3.1-flash-lite": True,
         }
@@ -111,7 +172,7 @@ def test_unsupported_provider_for_model_fails_validation() -> None:
     # Gemini is OpenRouter-only in V1.
     with pytest.raises(ValidationError):
         _config(
-            models={"gemini-3.1-flash-lite": "anthropic", "claude-sonnet-4.6": True}
+            models={"gemini-3.1-flash-lite": "anthropic", "claude-sonnet-5": True}
         )
 
 
@@ -138,24 +199,24 @@ def test_default_user_path_is_always_config_json(monkeypatch: pytest.MonkeyPatch
 def test_nested_model_entry_and_shorthands() -> None:
     config = _config(
         models={
-            "claude-sonnet-4.6": {"enabled": True, "provider": "openrouter"},  # nested
+            "claude-sonnet-5": {"enabled": True, "provider": "openrouter"},  # nested
             "claude-haiku-4.5": True,  # bool shorthand
             "gemini-3.1-flash-lite": "openrouter",  # provider-string shorthand
         }
     )
-    assert config.resolve_model("claude-sonnet-4.6").provider == "openrouter"
+    assert config.resolve_model("claude-sonnet-5").provider == "openrouter"
     assert config.resolve_model("claude-haiku-4.5").provider == "anthropic"  # default
     assert config.enabled_models() == [
         "gemini-3.1-flash-lite",
         "claude-haiku-4.5",
-        "claude-sonnet-4.6",
+        "claude-sonnet-5",
     ]
 
 
 def test_nested_entry_disabled() -> None:
     config = _config(
         models={
-            "claude-sonnet-4.6": {"enabled": True},
+            "claude-sonnet-5": {"enabled": True},
             "claude-haiku-4.5": {"enabled": False},
             "gemini-3.1-flash-lite": True,
         }
@@ -171,12 +232,12 @@ def test_server_auth_key_allows_non_loopback_binding() -> None:
 
 def test_unknown_model_fails_validation() -> None:
     with pytest.raises(ValidationError):
-        _config(models={"claude-sonnet-4.6": True, "not-a-model": True})
+        _config(models={"claude-sonnet-5": True, "not-a-model": True})
 
 
 def test_default_must_be_enabled() -> None:
     with pytest.raises(ValidationError):
-        _config(models={"claude-sonnet-4.6": False}, default="claude-sonnet-4.6")
+        _config(models={"claude-sonnet-5": False}, default="claude-sonnet-5")
 
 
 def test_confidence_must_be_probability() -> None:
@@ -228,3 +289,23 @@ def test_missing_runtime_env_reports_router_and_enabled_provider_keys(
         "ANTHROPIC_API_KEY",
         "OPENROUTER_API_KEY",
     ]
+
+
+def test_gemini_native_google_is_selectable_but_openrouter_is_default() -> None:
+    gemini = CATALOG["gemini-3.1-flash-lite"]
+    assert gemini.providers == {
+        "openrouter": "google/gemini-3.1-flash-lite",
+        "google": "gemini-3.1-flash-lite",
+    }
+    assert gemini.default_provider == "openrouter"
+
+    config = AppConfig.model_validate(
+        {
+            "models": {"gemini-3.1-flash-lite": {"enabled": True, "provider": "google"}},
+            "default": "gemini-3.1-flash-lite",
+        }
+    )
+    resolved = config.resolve_model("gemini-3.1-flash-lite")
+    assert resolved.provider == "google"
+    assert resolved.model_id == "gemini-3.1-flash-lite"
+    assert config.required_provider_env() == {"google": "GOOGLE_API_KEY"}

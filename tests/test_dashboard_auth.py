@@ -14,7 +14,7 @@ def _store(tmp_path) -> SqliteStore:
     store.write(
         EventRecord(
             id="x", ts=time.time(), session_id="s1", call_kind="main",
-            requested_model="claude-sonnet-4-6", served_model="claude-haiku-4.5",
+            requested_model="claude-sonnet-5", served_model="claude-haiku-4.5",
             provider="anthropic", model_id="claude-haiku-4-5", route_reason="deviate_if_confident",
             input_tokens=10, output_tokens=2, cache_read_tokens=0, cache_creation_tokens=0,
             cost_usd=0.001, duration_ms=1.0, raw_event=None,
@@ -26,7 +26,7 @@ def _store(tmp_path) -> SqliteStore:
 def _client(store, auth_key=None) -> TestClient:
     app = FastAPI()
     app.include_router(
-        build_dashboard_router(store, "claude-sonnet-4.6", auth_key=auth_key)
+        build_dashboard_router(store, "claude-sonnet-5", auth_key=auth_key)
     )
     return TestClient(app)
 
