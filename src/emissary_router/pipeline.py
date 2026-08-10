@@ -34,7 +34,7 @@ from emissary_router.telemetry import (
 logger = logging.getLogger(__name__)
 
 SESSION_HEADER = "x-claude-code-session-id"
-BASELINE_MODEL = "claude-sonnet-4.6"  # the "default Sonnet" side of the demo comparison
+BASELINE_MODEL = "claude-sonnet-5"  # the "default Sonnet" side of the demo comparison (4.6 retired 2026-08)
 _AGENT_MAX_ROUNDS = 16  # runaway guard for the tool loop, not a functional limit
 # Anthropic requires this header on every request; Claude Code sends it, but the demo
 # builds its own requests, so it must supply it (harmless for other providers).

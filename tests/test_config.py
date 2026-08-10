@@ -309,3 +309,11 @@ def test_gemini_native_google_is_selectable_but_openrouter_is_default() -> None:
     assert resolved.provider == "google"
     assert resolved.model_id == "gemini-3.1-flash-lite"
     assert config.required_provider_env() == {"google": "GOOGLE_API_KEY"}
+
+
+def test_demo_baseline_model_exists_in_catalog() -> None:
+    # BASELINE_MODEL is a hardcoded name (the demo's "straight Sonnet" side); a catalog
+    # retirement must not orphan it — that surfaces as a bare KeyError at demo runtime.
+    from emissary_router.pipeline import BASELINE_MODEL
+
+    assert BASELINE_MODEL in CATALOG

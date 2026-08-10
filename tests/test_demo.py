@@ -15,12 +15,12 @@ from emissary_router.pipeline import RouterPipeline
 
 class _ConfidentHaiku:
     async def predict(self, _input):
-        return {"gemini-3.1-flash-lite": 0.2, "claude-haiku-4.5": 0.95, "claude-sonnet-4.6": 0.3}
+        return {"gemini-3.1-flash-lite": 0.2, "claude-haiku-4.5": 0.95, "claude-sonnet-5": 0.3}
 
 
 class _Unconfident:
     async def predict(self, _input):
-        return {"gemini-3.1-flash-lite": 0.2, "claude-haiku-4.5": 0.3, "claude-sonnet-4.6": 0.4}
+        return {"gemini-3.1-flash-lite": 0.2, "claude-haiku-4.5": 0.3, "claude-sonnet-5": 0.4}
 
 
 class _FakeProvider:
@@ -42,11 +42,11 @@ def _pipeline(classifier):
     config = AppConfig.model_validate(
         {
             "models": {
-                "claude-sonnet-4.6": True,
+                "claude-sonnet-5": True,
                 "claude-haiku-4.5": True,
                 "gemini-3.1-flash-lite": True,
             },
-            "default": "claude-sonnet-4.6",
+            "default": "claude-sonnet-5",
         }
     )
     pipe = RouterPipeline(config)
@@ -63,12 +63,14 @@ def test_chat_routes_to_cheaper_model_and_reports_savings():
     pipe = _pipeline(_ConfidentHaiku())
     result = asyncio.run(pipe.chat(_turn("what is a hash map?"), _turn("what is a hash map?")))
 
-    assert result["baseline_model"] == "claude-sonnet-4.6"
-    assert result["baseline"]["model"] == "claude-sonnet-4.6"
-    assert result["baseline"]["answer"] == "answer:claude-sonnet-4.6"
+    assert result["baseline_model"] == "claude-sonnet-5"
+    assert result["baseline"]["model"] == "claude-sonnet-5"
+    assert result["baseline"]["answer"] == "answer:claude-sonnet-5"
     assert result["routed"]["model"] == "claude-haiku-4.5"
     assert result["routed"]["answer"] == "answer:claude-haiku-4.5"
-    assert result["routed"]["route_reason"].startswith("deviate_if_confident")
+    # merged policy auto-selects the cache-aware path whenever cost features exist;
+    # the deviation reason is cache_aware:* now (was deviate_if_confident:* pre-merge)
+    assert result["routed"]["route_reason"].startswith("cache_aware:candidate_cheaper")
     assert result["baseline"]["cost_usd"] > result["routed"]["cost_usd"] > 0
     assert result["savings_pct"] > 0
 
@@ -89,7 +91,7 @@ def test_chat_escalates_to_sonnet_when_not_confident():
     pipe = _pipeline(_Unconfident())
     result = asyncio.run(pipe.chat(_turn("prove sqrt(2) is irrational"), _turn("prove sqrt(2) is irrational")))
 
-    assert result["routed"]["model"] == "claude-sonnet-4.6"  # same as baseline
+    assert result["routed"]["model"] == "claude-sonnet-5"  # same as baseline
     assert result["savings_pct"] == 0
 
 
@@ -97,7 +99,7 @@ def test_chat_side_runs_only_one_side():
     pipe = _pipeline(_ConfidentHaiku())
     base = asyncio.run(pipe.chat_side("baseline", _turn("hi"), _turn("hi")))
     routed = asyncio.run(pipe.chat_side("routed", _turn("hi"), _turn("hi"), session_id="s1", policy="cache_aware"))
-    assert base["model"] == "claude-sonnet-4.6"
+    assert base["model"] == "claude-sonnet-5"
     assert base["router_ms"] == 0.0
     assert routed["model"] == "claude-haiku-4.5"
     assert routed["route_reason"]  # routed side carries the routing reason
@@ -330,7 +332,7 @@ def _openrouter_model():
     from emissary_router.config import AppConfig
 
     config = AppConfig.model_validate(
-        {"models": {"gemini-3.1-flash-lite": True, "claude-sonnet-4.6": True}, "default": "claude-sonnet-4.6"}
+        {"models": {"gemini-3.1-flash-lite": True, "claude-sonnet-5": True}, "default": "claude-sonnet-5"}
     )
     return config.resolve_model("gemini-3.1-flash-lite")  # OpenRouter-only in the catalog
 
@@ -406,7 +408,7 @@ class _RecordingPipeline:
     async def stream_chat(self, baseline_messages, routed_messages, session_id=None, max_tokens=32000, effort=None, policy=None, search=False):
         yield {"side": "routed", "type": "meta", "model": "claude-haiku-4.5", "router_ms": 2}
         yield {"side": "baseline", "type": "delta", "text": "hi"}
-        yield {"side": "baseline", "type": "done", "model": "claude-sonnet-4.6", "cost_usd": 0.002,
+        yield {"side": "baseline", "type": "done", "model": "claude-sonnet-5", "cost_usd": 0.002,
                "model_ms": 10, "router_ms": 0.0, "total_ms": 10}
         yield {"side": "routed", "type": "done", "model": "claude-haiku-4.5", "cost_usd": 0.0007,
                "model_ms": 8, "router_ms": 2, "total_ms": 10}
@@ -415,8 +417,8 @@ class _RecordingPipeline:
         self.kwargs = {"baseline": baseline_messages, "routed": routed_messages, "session_id": session_id,
                        "max_tokens": max_tokens, "effort": effort, "policy": policy}
         return {
-            "baseline_model": "claude-sonnet-4.6",
-            "baseline": {"model": "claude-sonnet-4.6", "answer": "a", "cost_usd": 0.002,
+            "baseline_model": "claude-sonnet-5",
+            "baseline": {"model": "claude-sonnet-5", "answer": "a", "cost_usd": 0.002,
                          "router_ms": 0.0, "model_ms": 10, "total_ms": 10},
             "routed": {"model": "claude-haiku-4.5", "answer": "b", "cost_usd": 0.0007,
                        "router_ms": 2, "model_ms": 8, "total_ms": 10,
@@ -427,7 +429,7 @@ class _RecordingPipeline:
     async def chat_side(self, side, baseline_messages, routed_messages, session_id=None, max_tokens=32000, effort=None, policy=None):
         self.kwargs = {"side": side, "baseline": baseline_messages, "routed": routed_messages,
                        "session_id": session_id, "max_tokens": max_tokens, "effort": effort, "policy": policy}
-        model = "claude-sonnet-4.6" if side == "baseline" else "claude-haiku-4.5"
+        model = "claude-sonnet-5" if side == "baseline" else "claude-haiku-4.5"
         return {"model": model, "answer": side, "cost_usd": 0.001, "router_ms": 0, "model_ms": 5, "total_ms": 5}
 
 
@@ -457,7 +459,7 @@ def test_chat_endpoint_side_runs_one_side():
     msg = [{"role": "user", "content": "hi"}]
     resp = client.post("/api/demo/chat", json={"baseline": msg, "routed": msg, "side": "baseline"})
     assert resp.status_code == 200
-    assert resp.json()["model"] == "claude-sonnet-4.6"  # one side only, no baseline/routed wrapper
+    assert resp.json()["model"] == "claude-sonnet-5"  # one side only, no baseline/routed wrapper
     assert rec.kwargs["side"] == "baseline"
 
 
