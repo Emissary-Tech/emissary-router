@@ -167,11 +167,13 @@ CATALOG: dict[str, ModelSpec] = {
         },
         default_provider="anthropic",
         pricing=TokenPricing(
-            input=3.00,
-            output=15.00,
-            cache_read=0.30,
-            cache_write_5m=3.75,
-            cache_write_1h=6.00,
+            # Anthropic price cut (user-reported 2026-08-15): 3.00/15.00 -> 2.00/10.00;
+            # cache rates follow the standard multipliers (read 0.1x, write 1.25x/2x).
+            input=2.00,
+            output=10.00,
+            cache_read=0.20,
+            cache_write_5m=2.50,
+            cache_write_1h=4.00,
         ),
     ),
     "kimi-k3": ModelSpec(

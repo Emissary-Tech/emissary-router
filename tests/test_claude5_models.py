@@ -36,7 +36,8 @@ def test_sampling_params_untouched_for_other_models() -> None:
 
 
 def test_new_models_price_ladder() -> None:
-    assert cost_score(CATALOG["kimi-k3"]) == cost_score(CATALOG["claude-sonnet-5"])
+    # 2026-08 sonnet price cut (3/15 -> 2/10): sonnet now undercuts kimi-k3
+    assert cost_score(CATALOG["claude-sonnet-5"]) < cost_score(CATALOG["kimi-k3"])
     assert cost_score(CATALOG["claude-opus-5"]) > cost_score(CATALOG["claude-sonnet-5"])
     assert set(CATALOG["kimi-k3"].providers) == {"openrouter"}
 
