@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Literal
 
@@ -236,3 +237,23 @@ PROVIDER_ENV: dict[ProviderName, str] = {
 }
 
 ROUTER_API_KEY_ENV = "EMISSARY_ROUTER_API_KEY"
+
+# Benchmark-only catalog extras, gated behind an env var so they can never leak
+# into production rosters (a zero-priced entry would sort "cheapest" and pollute
+# any enable-everything config). The er_bench gateway sets the var; the live ER
+# never does. openrouter-auto = the competitor Auto Router served through ER's
+# protocol translation; billed cost comes from the OR key's usage delta, never
+# from ER telemetry (pricing zeros are deliberate).
+if os.environ.get("EMISSARY_ROUTER_BENCH_EXTRAS"):
+    CATALOG["openrouter-auto"] = ModelSpec(
+        name="openrouter-auto",
+        providers={"openrouter": "openrouter/auto"},
+        default_provider="openrouter",
+        pricing=TokenPricing(
+            input=0.0,
+            output=0.0,
+            cache_read=0.0,
+            cache_write_5m=0.0,
+            cache_write_1h=0.0,
+        ),
+    )

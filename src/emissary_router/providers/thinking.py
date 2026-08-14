@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -120,6 +121,17 @@ THINKING_CAPABILITIES = {
         can_disable_thinking=False,
     ),
 }
+
+# Benchmark-only competitor entry, gated like its catalog twin (see catalog.py).
+# OpenRouter's model metadata omits the reasoning field for dynamic router models
+# (openrouter/auto) — never send effort/thinking params; the chosen model runs at
+# its own defaults (the competitor's as-shipped behavior).
+if os.environ.get("EMISSARY_ROUTER_BENCH_EXTRAS"):
+    THINKING_CAPABILITIES["openrouter-auto"] = ModelThinkingCapabilities(
+        accepts_effort_param=False,
+        accepts_adaptive_thinking=False,
+    )
+
 
 
 # claude-5 models reject client sampling params (opus-5: any temperature/top_p;

@@ -75,42 +75,49 @@ class RouterPipeline:
             body, headers, self._cache_ledger.expected_output_tokens()
         )
 
-        # When the router classifier is unreachable (retries already exhausted in
-        # ClassifierClient) or returns an unparseable response, fall back to the
-        # configured default model rather than failing the request.
-        try:
-            probabilities = await self._classifier.predict(classifier_input)
-        except (httpx.HTTPError, KeyError, IndexError, ValueError, TypeError) as exc:
-            logger.warning("classifier failed; routing to default model: %s", exc)
-            decision = self._default_decision(reason="fallback: router_issue")
+        # A single-model config forces the decision — skip classification entirely.
+        # This is also what lets a config serve models the classifier has no head
+        # for (e.g. the benchmark-only openrouter-auto passthrough entry).
+        enabled = self._config.enabled_models()
+        if len(enabled) == 1 and self._config.default == enabled[0]:
+            decision = self._default_decision(reason="single_model")
         else:
-            missing_labels = self._missing_probability_labels(probabilities)
-            if missing_labels:
-                self._record_failure(
-                    request_id, started_at, body, session_id, call_kind,
-                    "(routing error)", 502,
+            # When the router classifier is unreachable (retries already exhausted
+            # in ClassifierClient) or returns an unparseable response, fall back to
+            # the configured default model rather than failing the request.
+            try:
+                probabilities = await self._classifier.predict(classifier_input)
+            except (httpx.HTTPError, KeyError, IndexError, ValueError, TypeError) as exc:
+                logger.warning("classifier failed; routing to default model: %s", exc)
+                decision = self._default_decision(reason="fallback: router_issue")
+            else:
+                missing_labels = self._missing_probability_labels(probabilities)
+                if missing_labels:
+                    self._record_failure(
+                        request_id, started_at, body, session_id, call_kind,
+                        "(routing error)", 502,
+                    )
+                    return JSONResponse(
+                        {
+                            "error": {
+                                "type": "classifier_label_mismatch",
+                                "message": "classifier response is missing labels required by config",
+                                "missing_labels": missing_labels,
+                            }
+                        },
+                        status_code=502,
+                    )
+                # Background (title/summary) calls run with thinking disabled; don't
+                # route them to always-on-reasoning models that can't honor that (and
+                # that reason on a utility call, wasting cost/latency).
+                skip = always_on_reasoning_models() if call_kind == "background" else frozenset()
+                decision = choose_model(
+                    self._config,
+                    probabilities,
+                    skip_models=skip,
+                    cost_features=cost_features,
+                    cache_ledger=self._cache_ledger,
                 )
-                return JSONResponse(
-                    {
-                        "error": {
-                            "type": "classifier_label_mismatch",
-                            "message": "classifier response is missing labels required by config",
-                            "missing_labels": missing_labels,
-                        }
-                    },
-                    status_code=502,
-                )
-            # Background (title/summary) calls run with thinking disabled; don't route
-            # them to always-on-reasoning models that can't honor that (and that reason
-            # on a utility call, wasting cost/latency).
-            skip = always_on_reasoning_models() if call_kind == "background" else frozenset()
-            decision = choose_model(
-                self._config,
-                probabilities,
-                skip_models=skip,
-                cost_features=cost_features,
-                cache_ledger=self._cache_ledger,
-            )
         model = self._config.resolve_model(decision.model_name)
         provider = self._providers[model.provider]
 
