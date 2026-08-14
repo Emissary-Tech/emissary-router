@@ -33,6 +33,12 @@ class ModelThinkingCapabilities:
     # (e.g. gpt-5.6 supports none but NOT minimal).
     # None = every rung up to max_effort is fine.
     supported_efforts: tuple[str, ...] | None = None
+    # True = senders must forward NO reasoning field of any kind. Distinct from
+    # accepts_effort=False (haiku via OpenRouter still takes a budget, mapped to
+    # native anthropic thinking semantics downstream). Set for dynamic router
+    # entries (openrouter-auto) whose downstream host converts reasoning.max_tokens
+    # into a hard output reservation and starves the response.
+    no_reasoning_surface: bool = False
 
 
 THINKING_CAPABILITIES = {
@@ -130,6 +136,7 @@ if os.environ.get("EMISSARY_ROUTER_BENCH_EXTRAS"):
     THINKING_CAPABILITIES["openrouter-auto"] = ModelThinkingCapabilities(
         accepts_effort_param=False,
         accepts_adaptive_thinking=False,
+        no_reasoning_surface=True,
     )
 
 
@@ -243,6 +250,17 @@ def always_on_reasoning_models() -> set[str]:
 def accepts_effort_for_model(model_name: str, default: bool = True) -> bool:
     capabilities = THINKING_CAPABILITIES.get(model_name)
     return capabilities.accepts_effort_param if capabilities else default
+
+
+def translates_reasoning_for_model(model_name: str) -> bool:
+    """False when the capability entry opts out of reasoning entirely
+    (no_reasoning_surface) — senders forward NO reasoning field, never a budget
+    fallback. Passing a Claude-style budget_tokens (max_tokens-1) through as
+    OpenRouter reasoning.max_tokens on such entries reserves the whole output
+    window for reasoning and the response dies at stop_reason=max_tokens after a
+    few chars (measured with openrouter-auto, 2026-08-15)."""
+    capabilities = THINKING_CAPABILITIES.get(model_name)
+    return not (capabilities and capabilities.no_reasoning_surface)
 
 
 def effort_reasoning_for_model(settings: ReasoningSettings, model_name: str) -> str | None:

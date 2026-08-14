@@ -613,3 +613,32 @@ def test_xhigh_effort_maps_per_openrouter_model() -> None:
     max_body["output_config"]["effort"] = "max"
     assert OpenRouterProvider._reasoning(max_body, "glm-5.2") == {"effort": "xhigh"}
     assert OpenRouterProvider._reasoning(max_body, "gemini-3.1-flash-lite") == {"effort": "high"}
+
+
+def test_openrouter_no_reasoning_surface_forwards_nothing() -> None:
+    # openrouter-auto (bench-gated): a Claude-style thinking budget must NOT fall
+    # back to reasoning.max_tokens — the downstream host turns that into a hard
+    # output reservation and the response dies at stop_reason=max_tokens
+    # (measured 2026-08-15: budget 31999/max_tokens 32000 -> 3-char responses).
+    from emissary_router.providers.thinking import (
+        THINKING_CAPABILITIES,
+        ModelThinkingCapabilities,
+    )
+
+    THINKING_CAPABILITIES["_test-auto"] = ModelThinkingCapabilities(
+        no_reasoning_surface=True,
+    )
+    try:
+        for extra in (
+            {"thinking": {"type": "enabled", "budget_tokens": 31999}},
+            {"thinking": {"effort": "high"}},
+            {"output_config": {"effort": "high"}},
+        ):
+            req = OpenRouterProvider.to_openai_request(
+                {"messages": [], "max_tokens": 32000, **extra},
+                "openrouter/auto",
+                model_name="_test-auto",
+            )
+            assert "reasoning" not in req, extra
+    finally:
+        del THINKING_CAPABILITIES["_test-auto"]

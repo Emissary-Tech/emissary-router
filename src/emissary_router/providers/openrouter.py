@@ -20,6 +20,7 @@ from emissary_router.providers.thinking import (
     extract_reasoning_settings,
     resolve_effort_for_model,
     thinking_budget_from_max_tokens,
+    translates_reasoning_for_model,
 )
 
 # OpenRouter's reasoning.effort enum tops out at xhigh — "max" is INVALID there.
@@ -696,6 +697,12 @@ class OpenRouterProvider:
 
     @classmethod
     def _reasoning(cls, body: dict[str, Any], model_name: str) -> dict[str, Any] | None:
+        # Models with no reasoning surface (e.g. the bench-only openrouter-auto
+        # passthrough) get NO reasoning field at all — every fallback below would
+        # otherwise smuggle Claude's budget (max_tokens-1) into reasoning.max_tokens
+        # and starve the actual output down to a few tokens.
+        if not translates_reasoning_for_model(model_name):
+            return None
         settings = extract_reasoning_settings(body)
         reasoning: dict[str, Any] = {}
         if settings.effort == "none":
