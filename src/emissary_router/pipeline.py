@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -151,7 +152,7 @@ class RouterPipeline:
                 cost_usd=self._cost_usd(decision.model_name, usage),
                 duration_ms=round((time.time() - started_at) * 1000, 3),
                 http_status=_int_or_none(provider_metadata.get("http_status")),
-                raw_event=None,
+                raw_event=_routed_raw_event(provider_metadata, model.model_id),
                 **usage_tokens(usage),
             )
             self._write(record)
@@ -223,6 +224,21 @@ def _header(headers: dict[str, str], name: str) -> str | None:
     for key, value in headers.items():
         if key.lower() == name:
             return value
+    return None
+
+
+def _routed_raw_event(provider_metadata: dict, requested_model_id: str) -> str | None:
+    """For dynamic-router calls (openrouter/auto), keep the actually-routed model
+    and the provider's own credit cost — the response is the only place they exist,
+    and the bench pick-distribution/cost tables are built from these rows."""
+    routed = provider_metadata.get("openrouter_model")
+    or_cost = provider_metadata.get("or_cost")
+    if (routed and routed != requested_model_id) or or_cost is not None:
+        return json.dumps({
+            "routed_model": routed,
+            "or_cost": or_cost,
+            "gen_id": provider_metadata.get("id"),
+        })
     return None
 
 

@@ -23,6 +23,10 @@ from emissary_router.providers.thinking import (
     translates_reasoning_for_model,
 )
 
+# Dynamic router entries hide the chosen model unless asked; usage accounting
+# (usage.include) adds the actual credit cost to the response for the same calls.
+DYNAMIC_ROUTER_MODELS = ("openrouter/auto", "openrouter/auto-beta")
+
 # OpenRouter's reasoning.effort enum tops out at xhigh — "max" is INVALID there.
 # (max itself is real on NATIVE surfaces: Anthropic claude-5 and OpenAI gpt-5.6
 # both define it; OpenRouter's unified enum just doesn't.) The per-model vocabulary
@@ -173,6 +177,7 @@ class OpenRouterProvider:
                 "stream": bool(request.body.get("stream")),
                 "openrouter_model": payload.get("model"),
                 "openrouter_metadata": payload.get("openrouter_metadata"),
+                "or_cost": (payload.get("usage") or {}).get("cost"),
                 "id": payload.get("id"),
             },
         )
@@ -283,7 +288,9 @@ class OpenRouterProvider:
             self._complete(
                 on_complete,
                 self.usage_from_response({"usage": sink.get("usage") or {}}),
-                {"http_status": status, "stream": True, "error": error},
+                {"http_status": status, "stream": True, "error": error,
+                 "openrouter_model": sink.get("model"),
+                 "or_cost": (sink.get("usage") or {}).get("cost")},
             )
 
     @classmethod
@@ -404,6 +411,8 @@ class OpenRouterProvider:
                 obj = json.loads(data)
             except json.JSONDecodeError:
                 continue
+            if obj.get("model"):
+                sink["model"] = obj["model"]
             if obj.get("usage"):
                 # Record the moment usage arrives: a client cancel or upstream drop
                 # during the trailing events must not zero out telemetry for a
@@ -529,6 +538,10 @@ class OpenRouterProvider:
 
         if context and context.conversation_id:
             request["session_id"] = context.conversation_id[:256]
+
+        if model_id in DYNAMIC_ROUTER_MODELS:
+            # surface the routed model + real credit cost for bench telemetry
+            request["usage"] = {"include": True}
 
         if _is_anthropic_model(model_id):
             request["cache_control"] = {"type": "ephemeral"}
