@@ -609,10 +609,27 @@ class OpenRouterProvider:
         # changes, and would misrepresent a per-turn note as a global preamble.
         messages: list[dict[str, Any]] = []
         body_messages: list[dict[str, Any]] = []
-        system_parts: list[str] = []
-        top_system = strip_cch_text(cls._stringify(body.get("system")))
-        if top_system:
-            system_parts.append(top_system)
+        # (text, cache_control|None) — Anthropic caching is EXPLICIT: breakpoints must
+        # survive translation or anthropic-family models served via OpenRouter bill
+        # every input token at full rate (measured: 70.6M uncached tokens in one run).
+        # OpenRouter forwards cache_control on content parts; models with implicit
+        # caching ignore it.
+        system_parts: list[tuple[str, dict[str, Any] | None]] = []
+        top_system = body.get("system")
+        if isinstance(top_system, list):
+            for block in top_system:
+                if isinstance(block, dict):
+                    text = strip_cch_text(block.get("text") or cls._stringify(block))
+                    if text:
+                        system_parts.append((text, block.get("cache_control")))
+                else:
+                    text = strip_cch_text(str(block))
+                    if text:
+                        system_parts.append((text, None))
+        else:
+            text = strip_cch_text(cls._stringify(top_system))
+            if text:
+                system_parts.append((text, None))
 
         leading = True
         for message in body.get("messages", []) or []:
@@ -622,7 +639,7 @@ class OpenRouterProvider:
                 if not inline:
                     continue
                 if leading:
-                    system_parts.append(inline)
+                    system_parts.append((inline, None))
                 else:
                     if "<system-reminder" not in inline:
                         inline = f"<system-reminder>\n{inline}\n</system-reminder>"
@@ -632,7 +649,14 @@ class OpenRouterProvider:
             body_messages.append(message)
 
         if system_parts:
-            messages.append({"role": "system", "content": "\n\n".join(system_parts)})
+            if any(cc for _, cc in system_parts):
+                content: Any = [
+                    {"type": "text", "text": text, **({"cache_control": cc} if cc else {})}
+                    for text, cc in system_parts
+                ]
+            else:
+                content = "\n\n".join(text for text, _ in system_parts)
+            messages.append({"role": "system", "content": content})
 
         for message in body_messages:
             role = message.get("role")
@@ -672,15 +696,27 @@ class OpenRouterProvider:
                 for block in blocks:
                     block_type = block.get("type")
                     if block_type == "tool_result":
+                        result_text = cls._stringify(block.get("content"))
+                        cc = block.get("cache_control")
                         tool_messages.append(
                             {
                                 "role": "tool",
                                 "tool_call_id": block.get("tool_use_id"),
-                                "content": cls._stringify(block.get("content")),
+                                "content": (
+                                    [{"type": "text", "text": result_text, "cache_control": cc}]
+                                    if cc else result_text
+                                ),
                             }
                         )
                     elif block_type == "text":
-                        text_parts.append(block.get("text", ""))
+                        if block.get("cache_control"):
+                            text_parts.append({
+                                "type": "text",
+                                "text": block.get("text", ""),
+                                "cache_control": block["cache_control"],
+                            })
+                        else:
+                            text_parts.append(block.get("text", ""))
                     elif block_type == "image":
                         image = cls._image_content(block)
                         if image:

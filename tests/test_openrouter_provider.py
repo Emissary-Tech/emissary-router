@@ -642,3 +642,53 @@ def test_openrouter_no_reasoning_surface_forwards_nothing() -> None:
             assert "reasoning" not in req, extra
     finally:
         del THINKING_CAPABILITIES["_test-auto"]
+
+
+def test_openrouter_preserves_anthropic_cache_control() -> None:
+    # Anthropic caching is explicit: dropping cache_control in translation bills
+    # anthropic-family models (served via OpenRouter) at full input rate.
+    req = OpenRouterProvider.to_openai_request(
+        {
+            "system": [
+                {"type": "text", "text": "stable preamble"},
+                {"type": "text", "text": "tool docs",
+                 "cache_control": {"type": "ephemeral"}},
+            ],
+            "messages": [
+                {"role": "user", "content": [
+                    {"type": "text", "text": "hello",
+                     "cache_control": {"type": "ephemeral"}},
+                ]},
+                {"role": "assistant", "content": [
+                    {"type": "tool_use", "id": "t1", "name": "bash",
+                     "input": {"command": "ls"}},
+                ]},
+                {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "t1", "content": "ok",
+                     "cache_control": {"type": "ephemeral"}},
+                ]},
+            ],
+            "max_tokens": 100,
+        },
+        "openrouter/auto",
+        model_name="openrouter-auto",
+    )
+    sys_msg = req["messages"][0]
+    assert sys_msg["role"] == "system"
+    assert sys_msg["content"][0] == {"type": "text", "text": "stable preamble"}
+    assert sys_msg["content"][1]["cache_control"] == {"type": "ephemeral"}
+    user_msg = req["messages"][1]
+    assert user_msg["content"][0]["cache_control"] == {"type": "ephemeral"}
+    tool_msg = next(m for m in req["messages"] if m["role"] == "tool")
+    assert tool_msg["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_openrouter_no_cache_control_keeps_plain_strings() -> None:
+    req = OpenRouterProvider.to_openai_request(
+        {"system": "plain", "messages": [{"role": "user", "content": "hi"}],
+         "max_tokens": 10},
+        "z-ai/glm-5.2",
+        model_name="glm-5.2",
+    )
+    assert req["messages"][0] == {"role": "system", "content": "plain"}
+    assert req["messages"][1]["content"] == "hi"
