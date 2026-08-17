@@ -3,13 +3,13 @@
 Each catalog model is bound to a provider. Provider and upstream model id are owned
 by the catalog, not your config.
 
-| Model | Provider | Upstream model id | Context window |
-|---|---|---|---|
-| `claude-sonnet-5` | Anthropic | `claude-sonnet-5` | 200K (1M with the `context-1m` beta) |
-| `claude-haiku-4.5` | Anthropic | `claude-haiku-4-5` | 200K |
-| `gemini-3.1-flash-lite` | OpenRouter (default) or Google native | `google/gemini-3.1-flash-lite` / `gemini-3.1-flash-lite` | 1M |
-| `glm-5.2` | OpenRouter (default) or Z.ai native | `z-ai/glm-5.2` / `glm-5.2` | 1M |
-| `kimi-k2.7-code` | OpenRouter | `moonshotai/kimi-k2.7-code` | 256K |
+| Model                   | Provider                              | Upstream model id                                        | Context window                       |
+| ----------------------- | ------------------------------------- | -------------------------------------------------------- | ------------------------------------ |
+| `claude-sonnet-5`       | Anthropic                             | `claude-sonnet-5`                                        | 200K (1M with the `context-1m` beta) |
+| `claude-haiku-4.5`      | Anthropic                             | `claude-haiku-4-5`                                       | 200K                                 |
+| `gemini-3.1-flash-lite` | OpenRouter (default) or Google native | `google/gemini-3.1-flash-lite` / `gemini-3.1-flash-lite` | 1M                                   |
+| `glm-5.2`               | OpenRouter (default) or Z.ai native   | `z-ai/glm-5.2` / `glm-5.2`                               | 1M                                   |
+| `kimi-k2.7-code`        | OpenRouter                            | `moonshotai/kimi-k2.7-code`                              | 256K                                 |
 
 Provider API keys come from the environment (`ANTHROPIC_API_KEY`,
 `OPENROUTER_API_KEY`, `ZAI_API_KEY` when GLM is configured with
@@ -42,7 +42,7 @@ The native path is at feature parity with the OpenRouter one: responses stream f
 real (Google SSE translated live into Anthropic SSE — thought parts as a thinking
 block, text deltas, whole functionCall parts as tool_use blocks), and implicit cache
 reads are reported natively (`cachedContentTokenCount`; measured — Google caches
-prefix *fragments*, so a warm turn credits part of the prefix rather than all of
+prefix _fragments_, so a warm turn credits part of the prefix rather than all of
 it, and short prefixes below the cache minimum report nothing). OpenRouter simply
 remains the recommended default; pick `"provider": "google"` (with
 `GOOGLE_API_KEY`) for first-party serving and single-host caching.
@@ -62,7 +62,7 @@ native Anthropic requests were always a raw streaming passthrough.
 
 ## Context windows and long conversations
 
-Claude Code decides when to auto-compact from the window of the model it *believes*
+Claude Code decides when to auto-compact from the window of the model it _believes_
 it is talking to (the one in `/model`), using the usage numbers the router passes
 through. With the default 200K budget this is safe with the catalog above: every
 routable model has a 200K+ window, so Claude Code compacts before any of them can
@@ -110,8 +110,16 @@ router preserves each provider's native mechanism rather than managing caches it
   strips the legacy dynamic `cch=` attribution line on every provider path so the
   prompt prefix stays byte-stable (current Claude Code no longer sends it; the strip
   protects sessions from older clients).
-- OpenRouter: Claude models use OpenRouter/Anthropic cache accounting where
-  available; Gemini, GLM, and Kimi use implicit (automatic) caching.
+- OpenRouter: caching is opt-in per request, and the router opts in on **every**
+  request with OpenRouter's documented one-field form (`cache_control` at the top level
+  of the body) — OpenRouter then places the breakpoint on the last cacheable block
+  itself. Anthropic-family models served here honour it; Gemini, GLM, Kimi and DeepSeek
+  cache implicitly and ignore it. Claude Code's own per-block breakpoints are NOT
+  translated onto the OpenAI-shape parts, and do not need to be: measured over a growing
+  three-turn conversation, OpenRouter's automatic placement and a hand-rolled per-turn
+  breakpoint cache the same tokens (66.7% of input on turn 2, 75.0% on turn 3, 55.6%
+  overall — identical either way).
+
 - Native Google: explicit `CachedContent` lifecycle management is out of scope in V1.
 
 Cache reads/writes are recorded in [telemetry](telemetry.md) when the provider
@@ -119,13 +127,13 @@ reports them.
 
 ### Cache support by provider and model
 
-| Model | anthropic | openrouter | zai | google |
-|---|---|---|---|---|
-| `claude-sonnet-5` | ✅ explicit prompt cache | ✅ Anthropic cache accounting via OpenRouter | — | — |
-| `claude-haiku-4.5` | ✅ explicit prompt cache | ✅ Anthropic cache accounting via OpenRouter | — | — |
-| `gemini-3.1-flash-lite` | — | ⚠️ implicit, per-host | — | ⚠️ implicit, single host — reads land (measured; partial-fragment credits) |
-| `glm-5.2` | — | ⚠️ implicit, per-host | ⚠️ implicit, single host — reads land reliably (measured) | — |
-| `kimi-k2.7-code` | — | ⚠️ implicit, per-host | — | — |
+| Model                   | anthropic                | openrouter                                   | zai                                                       | google                                                                     |
+| ----------------------- | ------------------------ | -------------------------------------------- | --------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `claude-sonnet-5`       | ✅ explicit prompt cache | ✅ Anthropic cache accounting via OpenRouter | —                                                         | —                                                                          |
+| `claude-haiku-4.5`      | ✅ explicit prompt cache | ✅ Anthropic cache accounting via OpenRouter | —                                                         | —                                                                          |
+| `gemini-3.1-flash-lite` | —                        | ⚠️ implicit, per-host                        | —                                                         | ⚠️ implicit, single host — reads land (measured; partial-fragment credits) |
+| `glm-5.2`               | —                        | ⚠️ implicit, per-host                        | ⚠️ implicit, single host — reads land reliably (measured) | —                                                                          |
+| `kimi-k2.7-code`        | —                        | ⚠️ implicit, per-host                        | —                                                         | —                                                                          |
 
 - ✅ — deterministic caching: `cache_control` breakpoints pass through and cache
   reads/writes are reported reliably, so the router can trust them for its cost
@@ -133,7 +141,7 @@ reports them.
 - ⚠️ — implicit (automatic) caching with **per-host** caches behind OpenRouter's load
   balancer: a hit needs the request to re-land on a host that recently served the same
   prefix, so hits are opportunistic rather than guaranteed. The router only credits
-  these caches after an *observed* hit (`best_effort` tier) and never assumes one.
+  these caches after an _observed_ hit (`best_effort` tier) and never assumes one.
 - Universally: a cache never carries across providers or models — switching the served
   model always starts cold on the new one. The router prices exactly that when it
   decides whether switching is worth it.

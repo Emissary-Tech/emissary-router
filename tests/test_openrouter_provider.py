@@ -613,3 +613,18 @@ def test_xhigh_effort_maps_per_openrouter_model() -> None:
     max_body["output_config"]["effort"] = "max"
     assert OpenRouterProvider._reasoning(max_body, "glm-5.2") == {"effort": "xhigh"}
     assert OpenRouterProvider._reasoning(max_body, "gemini-3.1-flash-lite") == {"effort": "high"}
+
+
+def test_openrouter_cache_signal_reaches_non_claude_model_ids() -> None:
+    # Regression: OpenRouter's one-field cache opt-in used to be gated on the model id
+    # looking Anthropic, so `openrouter/auto` — which routes TO Claude but matches
+    # neither "anthropic/" nor "claude" — went out with no caching signal at all and
+    # billed every input token at full rate (70.6M uncached tokens in one bench run).
+    # The field is live-verified inert on implicit-caching models, so it is unconditional.
+    for model_id in ("openrouter/auto", "z-ai/glm-5.2", "anthropic/claude-sonnet-5"):
+        req = OpenRouterProvider.to_openai_request(
+            {"system": "s", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 10},
+            model_id,
+            model_name=model_id,
+        )
+        assert req["cache_control"] == {"type": "ephemeral"}, model_id

@@ -527,8 +527,20 @@ class OpenRouterProvider:
         if context and context.conversation_id:
             request["session_id"] = context.conversation_id[:256]
 
-        if _is_anthropic_model(model_id):
-            request["cache_control"] = {"type": "ephemeral"}
+        # OpenRouter's documented one-field opt-in: it applies the cache breakpoint to
+        # the last cacheable block itself, which is why we never have to translate
+        # Claude Code's own breakpoints onto the OpenAI-shape parts (measured: a rolling
+        # per-turn breakpoint caches the growing conversation to the token, 55.6% of
+        # input over three turns — identical either way).
+        #
+        # Sent for EVERY model id, deliberately. It used to be gated on the id looking
+        # Anthropic ("anthropic/" or "claude"), which silently excluded `openrouter/auto`
+        # — auto routes to Claude but matches neither, so those requests carried no
+        # caching signal and billed every input token at full rate (measured: 70.6M
+        # uncached tokens in one benchmark run). Live-verified 2026-08-15 that the field
+        # is inert — never an error — on glm-5.2, kimi-k2.7/k3, deepseek-v4-flash and
+        # gemini-3.1-flash-lite, which cache implicitly and ignore it.
+        request["cache_control"] = {"type": "ephemeral"}
 
         return request
 
@@ -805,7 +817,3 @@ class OpenRouterProvider:
             on_complete(usage, metadata)
         except Exception:
             return
-
-
-def _is_anthropic_model(model_id: str) -> bool:
-    return "anthropic/" in model_id or "claude" in model_id
