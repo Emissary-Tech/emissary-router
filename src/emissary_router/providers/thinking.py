@@ -133,6 +133,14 @@ THINKING_CAPABILITIES = {
 # (openrouter/auto) — never send effort/thinking params; the chosen model runs at
 # its own defaults (the competitor's as-shipped behavior).
 if os.environ.get("EMISSARY_ROUTER_BENCH_EXTRAS"):
+    # qwen3.8-27b (candidate): reasoning default ON at xhigh; effort vocabulary has
+    # NO "high" (low/medium/xhigh only — OR metadata), so effort=high snaps to xhigh.
+    THINKING_CAPABILITIES["qwen3.8-27b"] = ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=False,
+        max_effort="xhigh",
+        supported_efforts=("low", "medium", "xhigh"),
+    )
     THINKING_CAPABILITIES["openrouter-auto"] = ModelThinkingCapabilities(
         accepts_effort_param=False,
         accepts_adaptive_thinking=False,

@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from typing import Literal
 
-ProviderName = Literal["anthropic", "openrouter", "google", "zai", "openai"]
+ProviderName = Literal["anthropic", "openrouter", "google", "zai", "openai", "vllm"]
 
 
 @dataclass(frozen=True)
@@ -236,6 +236,8 @@ PROVIDER_ENV: dict[ProviderName, str] = {
     "google": "GOOGLE_API_KEY",
     "zai": "ZAI_API_KEY",
     "openai": "OPENAI_API_KEY",
+    # self-hosted OpenAI-compatible endpoint (vLLM); key optional on private networks
+    "vllm": "VLLM_API_KEY",
 }
 
 ROUTER_API_KEY_ENV = "EMISSARY_ROUTER_API_KEY"
@@ -247,6 +249,20 @@ ROUTER_API_KEY_ENV = "EMISSARY_ROUTER_API_KEY"
 # protocol translation; billed cost comes from the OR key's usage delta, never
 # from ER telemetry (pricing zeros are deliberate).
 if os.environ.get("EMISSARY_ROUTER_BENCH_EXTRAS"):
+    # Candidate under evaluation (2026-08-15, boss request): not in the serving
+    # roster until it passes the lifecycle gates. OpenRouter listing pricing.
+    CATALOG["qwen3.8-27b"] = ModelSpec(
+        name="qwen3.8-27b",
+        providers={"openrouter": "qwen/qwen3.8-27b", "vllm": "qwen/qwen3.8-27b"},
+        default_provider="openrouter",
+        pricing=TokenPricing(
+            input=0.45,
+            output=3.20,
+            cache_read=0.05,
+            cache_write_5m=0.45,
+            cache_write_1h=0.45,
+        ),
+    )
     CATALOG["openrouter-auto"] = ModelSpec(
         name="openrouter-auto",
         providers={"openrouter": "openrouter/auto"},

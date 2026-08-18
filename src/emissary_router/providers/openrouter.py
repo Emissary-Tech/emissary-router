@@ -86,7 +86,7 @@ def _reasoning_text(obj: dict[str, Any]) -> str:
     field (what GLM/Kimi send); falls back to text inside `reasoning_details` for models
     that only populate the structured form. Signature-only detail entries (no text) are
     skipped, so this never duplicates or emits empty thinking."""
-    text = obj.get("reasoning")
+    text = obj.get("reasoning") or obj.get("reasoning_content")
     if text:
         return text
     details = obj.get("reasoning_details")
@@ -124,11 +124,20 @@ class OpenRouterProvider:
         on_complete: ProviderComplete | None = None,
     ) -> Response:
         oai_body = self.to_openai_request(request.body, model.model_id, context, model.name)
+        if self._config.type == "vllm":
+            # vLLM's OpenAI server doesn't take OpenRouter's reasoning field; the
+            # model's chat template reasons by default (same contract as label runs)
+            oai_body.pop("reasoning", None)
+            oai_body.pop("usage", None)
+            oai_body.pop("session_id", None)
         headers = {
-            "Authorization": f"Bearer {self._config.api_key or ''}",
             "Content-Type": "application/json",
             "X-OpenRouter-Metadata": "enabled",
         }
+        if self._config.api_key:
+            headers["Authorization"] = f"Bearer {self._config.api_key}"
+        # (keyless self-hosted endpoints: omit the header entirely — httpx rejects
+        # the empty "Bearer " value outright)
 
         if request.body.get("stream"):
             # True streaming: translate OpenRouter's OpenAI-style SSE into Anthropic SSE
