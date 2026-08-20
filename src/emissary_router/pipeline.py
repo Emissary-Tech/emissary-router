@@ -76,6 +76,10 @@ class RouterPipeline:
             body, headers, self._cache_ledger.expected_output_tokens()
         )
 
+        # Classifier probabilities for this call, persisted into raw_event so
+        # offline analysis (tau sweeps, calibration) can replay decisions; stays
+        # None on the single-model and classifier-fallback paths.
+        probs: dict[str, float] | None = None
         # A single-model config forces the decision — skip classification entirely.
         # This is also what lets a config serve models the classifier has no head
         # for (e.g. the benchmark-only openrouter-auto passthrough entry).
@@ -92,6 +96,7 @@ class RouterPipeline:
                 logger.warning("classifier failed; routing to default model: %s", exc)
                 decision = self._default_decision(reason="fallback: router_issue")
             else:
+                probs = probabilities
                 missing_labels = self._missing_probability_labels(probabilities)
                 if missing_labels:
                     self._record_failure(
@@ -152,7 +157,9 @@ class RouterPipeline:
                 cost_usd=self._cost_usd(decision.model_name, usage),
                 duration_ms=round((time.time() - started_at) * 1000, 3),
                 http_status=_int_or_none(provider_metadata.get("http_status")),
-                raw_event=_routed_raw_event(provider_metadata, model.model_id),
+                raw_event=_routed_raw_event(
+                    provider_metadata, model.model_id, probs, self._config.confidence
+                ),
                 **usage_tokens(usage),
             )
             self._write(record)
@@ -227,19 +234,32 @@ def _header(headers: dict[str, str], name: str) -> str | None:
     return None
 
 
-def _routed_raw_event(provider_metadata: dict, requested_model_id: str) -> str | None:
+def _routed_raw_event(
+    provider_metadata: dict,
+    requested_model_id: str,
+    probabilities: dict[str, float] | None = None,
+    tau: float | None = None,
+) -> str | None:
     """For dynamic-router calls (openrouter/auto), keep the actually-routed model
     and the provider's own credit cost — the response is the only place they exist,
-    and the bench pick-distribution/cost tables are built from these rows."""
+    and the bench pick-distribution/cost tables are built from these rows. When the
+    classifier ran, also keep its per-head probabilities and the serving tau so
+    decisions can be replayed offline (tau sweeps, calibration) without re-running.
+    Additive keys only — consumers .get() specific fields."""
     routed = provider_metadata.get("openrouter_model")
     or_cost = provider_metadata.get("or_cost")
+    payload: dict = {}
     if (routed and routed != requested_model_id) or or_cost is not None:
-        return json.dumps({
+        payload.update({
             "routed_model": routed,
             "or_cost": or_cost,
             "gen_id": provider_metadata.get("id"),
         })
-    return None
+    if probabilities:
+        payload["probs"] = {k: round(v, 4) for k, v in probabilities.items()}
+        if tau is not None:
+            payload["tau"] = tau
+    return json.dumps(payload) if payload else None
 
 
 def _int_or_none(value: object) -> int | None:
