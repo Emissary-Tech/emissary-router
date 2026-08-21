@@ -141,6 +141,12 @@ if os.environ.get("EMISSARY_ROUTER_BENCH_EXTRAS"):
         max_effort="xhigh",
         supported_efforts=("low", "medium", "xhigh"),
     )
+    THINKING_CAPABILITIES["qwen3.5-9b"] = ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=False,
+        max_effort="xhigh",
+        supported_efforts=("low", "medium", "xhigh"),
+    )
     THINKING_CAPABILITIES["openrouter-auto"] = ModelThinkingCapabilities(
         accepts_effort_param=False,
         accepts_adaptive_thinking=False,

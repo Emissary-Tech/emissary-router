@@ -263,6 +263,21 @@ if os.environ.get("EMISSARY_ROUTER_BENCH_EXTRAS"):
             cache_write_1h=0.45,
         ),
     )
+    # Candidate under evaluation (2026-08-22, boss request): same lifecycle as
+    # qwen3.8-27b. OpenRouter listing pricing ($0.10/$0.15); cache read at the
+    # same ~1/9 ratio used for the 27b entry.
+    CATALOG["qwen3.5-9b"] = ModelSpec(
+        name="qwen3.5-9b",
+        providers={"openrouter": "qwen/qwen3.5-9b", "vllm": "qwen/qwen3.5-9b"},
+        default_provider="openrouter",
+        pricing=TokenPricing(
+            input=0.10,
+            output=0.15,
+            cache_read=0.01,
+            cache_write_5m=0.10,
+            cache_write_1h=0.10,
+        ),
+    )
     CATALOG["openrouter-auto"] = ModelSpec(
         name="openrouter-auto",
         providers={"openrouter": "openrouter/auto"},
