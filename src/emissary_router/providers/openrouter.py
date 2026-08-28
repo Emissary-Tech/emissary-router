@@ -81,6 +81,20 @@ def anthropic_error_payload(payload: Any) -> Any:
     return {"type": "error", "error": {"type": "invalid_request_error", "message": message}}
 
 
+def _vllm_template_kwargs(reasoning: dict | None, model_name: str) -> dict | None:
+    """Map the requested effort onto the model's chat-template thinking knob
+    (Qwen3.5/3.8: reasoning_effort low|medium|xhigh, default xhigh; explicit
+    disable via enable_thinking=false). None -> send nothing (template default,
+    the label-run contract)."""
+    effort = (reasoning or {}).get("effort")
+    if not effort:
+        return None
+    if effort == "none" and can_disable_thinking_for_model(model_name):
+        return {"enable_thinking": False}
+    resolved = resolve_effort_for_model(effort, model_name)
+    return {"reasoning_effort": resolved} if resolved else None
+
+
 def _reasoning_text(obj: dict[str, Any]) -> str:
     """Reasoning text from an OpenAI-style delta/message. Prefers the flat `reasoning`
     field (what GLM/Kimi send); falls back to text inside `reasoning_details` for models
@@ -125,11 +139,18 @@ class OpenRouterProvider:
     ) -> Response:
         oai_body = self.to_openai_request(request.body, model.model_id, context, model.name)
         if self._config.type == "vllm":
-            # vLLM's OpenAI server doesn't take OpenRouter's reasoning field; the
-            # model's chat template reasons by default (same contract as label runs)
-            oai_body.pop("reasoning", None)
+            # vLLM's OpenAI server doesn't take OpenRouter's reasoning field.
+            # Translate the requested effort into the model's chat-template knob
+            # instead: Qwen3.5/3.8 templates accept chat_template_kwargs
+            # {"reasoning_effort": low|medium|xhigh} (default xhigh — which is
+            # what every reasoning-stripped run so far effectively used) and
+            # {"enable_thinking": false} for an explicit disable.
+            reasoning = oai_body.pop("reasoning", None)
             oai_body.pop("usage", None)
             oai_body.pop("session_id", None)
+            kwargs = _vllm_template_kwargs(reasoning, model.name)
+            if kwargs:
+                oai_body["chat_template_kwargs"] = kwargs
         headers = {
             "Content-Type": "application/json",
             "X-OpenRouter-Metadata": "enabled",
