@@ -115,6 +115,25 @@ def _cache_aware(
 
     # `is_cheaper` is strict, so when best IS the default this is always a stay.
     if default_estimate is not None and not is_cheaper(best, default_estimate):
+        # Charm-style escalation: every confident candidate priced above the
+        # default only stays on the default when the default's own head clears
+        # the gate. If the default is unconfident about this request, send it to
+        # the cheapest confident candidate even though it costs more — "I say I
+        # can't; they say they can."
+        if (
+            config.escalate_if_default_unconfident
+            and len(candidates) > 1
+            and probabilities.get(config.default, 0.0) < config.confidence
+        ):
+            non_default = [e for n, e in estimates.items() if n != config.default]
+            up = min(non_default, key=lambda estimate: estimate.total_usd)
+            return RouteDecision(
+                model_name=up.model_name,
+                reason="cache_aware:escalate_default_unconfident",
+                probabilities=probabilities,
+                estimated_costs=estimated_costs,
+                cache_prediction=up.cache_prediction.to_dict(),
+            )
         # Stayed on default. Distinguish *why* so the cause is visible in telemetry:
         #   no_confident_candidate — no non-default model cleared `confidence`
         #   warm_default_cheaper   — the default's warm cache beat a confident candidate

@@ -118,8 +118,9 @@ def test_routing_order_is_by_price_not_dict_order(monkeypatch: pytest.MonkeyPatc
         "claude-sonnet-5",
         "gpt-5.6-terra",
         "kimi-k3",
-        "claude-opus-5",
+        # sol moved below opus after the 2026-08 GPT price sheet (4/20 vs 5/25)
         "gpt-5.6-sol",
+        "claude-opus-5",
     ]
 
 

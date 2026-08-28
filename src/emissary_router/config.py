@@ -208,6 +208,10 @@ class AppConfig(BaseModel):
     models: dict[str, ModelEntry]
     default: str
     confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+    # Charm-style upward escalation: when the default's own head is below the
+    # confidence gate but some pricier model clears it, route there (cheapest of
+    # the confident set). Off by default — current production behavior unchanged.
+    escalate_if_default_unconfident: bool = False
     # Deprecated no-op, accepted so configs written by older versions still load.
     # Routing is cache-aware by default now (falling back to plain price order
     # wherever there is no cache signal) — there is no policy to choose.

@@ -58,15 +58,16 @@ CATALOG: dict[str, ModelSpec] = {
         # OpenRouter is available opt-in ({"provider": "openrouter"}) — it serves the
         # same model through the chat-completions translation, so reasoning behavior
         # differs slightly; use it when no native OpenAI key is available. Cheapest
-        # model in the catalog; caching is automatic (no write premium).
+        # model in the catalog. 2026-08 price sheet: short-context tier, with a
+        # 1.25x cache-write line item (long-context tier is 2x across the board).
         providers={"openai": "gpt-5.6-luna", "openrouter": "openai/gpt-5.6-luna"},
         default_provider="openai",
         pricing=TokenPricing(
-            input=0.20,
-            output=1.20,
+            input=0.2,
+            output=1.2,
             cache_read=0.02,
-            cache_write_5m=0.20,
-            cache_write_1h=0.20,
+            cache_write_5m=0.25,
+            cache_write_1h=0.25,
         ),
     ),
     "gemini-3.1-flash-lite": ModelSpec(
@@ -147,11 +148,11 @@ CATALOG: dict[str, ModelSpec] = {
         providers={"openai": "gpt-5.6-terra", "openrouter": "openai/gpt-5.6-terra"},
         default_provider="openai",
         pricing=TokenPricing(
-            input=2.00,
-            output=12.00,
-            cache_read=0.20,
-            cache_write_5m=2.00,
-            cache_write_1h=2.00,
+            input=2.0,
+            output=12.0,
+            cache_read=0.2,
+            cache_write_5m=2.5,
+            cache_write_1h=2.5,
         ),
     ),
     "claude-sonnet-5": ModelSpec(
@@ -201,11 +202,11 @@ CATALOG: dict[str, ModelSpec] = {
         providers={"openai": "gpt-5.6-sol", "openrouter": "openai/gpt-5.6-sol"},
         default_provider="openai",
         pricing=TokenPricing(
-            input=5.00,
-            output=30.00,
-            cache_read=0.50,
-            cache_write_5m=5.00,
-            cache_write_1h=5.00,
+            input=4.0,
+            output=20.0,
+            cache_read=0.4,
+            cache_write_5m=5.0,
+            cache_write_1h=5.0,
         ),
     ),
     "claude-opus-5": ModelSpec(
