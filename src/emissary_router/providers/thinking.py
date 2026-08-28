@@ -147,6 +147,11 @@ if os.environ.get("EMISSARY_ROUTER_BENCH_EXTRAS"):
         max_effort="xhigh",
         supported_efforts=("low", "medium", "xhigh"),
     )
+    THINKING_CAPABILITIES["deepseek-v4-flash-0731"] = ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=False,
+        max_effort="xhigh",
+    )
     THINKING_CAPABILITIES["openrouter-auto"] = ModelThinkingCapabilities(
         accepts_effort_param=False,
         accepts_adaptive_thinking=False,

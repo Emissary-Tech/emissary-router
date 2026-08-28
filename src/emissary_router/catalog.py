@@ -38,19 +38,17 @@ def cost_score(spec: ModelSpec) -> float:
 CATALOG: dict[str, ModelSpec] = {
     "deepseek-v4-flash": ModelSpec(
         name="deepseek-v4-flash",
-        # The router's cost anchor (81% of picks in the v7 routing sim). Deliberately
-        # the BASE id — NOT deepseek-v4-flash-latest / -0731 (newer snapshot; our
-        # labels were made against the base id). DeepSeek official pricing
-        # (2026-08-04): 0.14 miss / 0.028 cache hit (80% discount, automatic disk
-        # prefix cache, no write premium) / 0.28 out.
-        providers={"openrouter": "deepseek/deepseek-v4-flash"},
+        # Moved to the -0731 snapshot (2026-08-26, impact test: the
+        # emissary-qwen-router classifier is trained against it). DeepSeek official
+        # pricing: 0.22 in / 0.007 cache hit / 0.66 out (no write premium).
+        providers={"openrouter": "deepseek/deepseek-v4-flash-0731"},
         default_provider="openrouter",
         pricing=TokenPricing(
-            input=0.14,
-            output=0.28,
-            cache_read=0.028,
-            cache_write_5m=0.14,
-            cache_write_1h=0.14,
+            input=0.22,
+            output=0.66,
+            cache_read=0.007,
+            cache_write_5m=0.22,
+            cache_write_1h=0.22,
         ),
     ),
     "gpt-5.6-luna": ModelSpec(
@@ -249,18 +247,19 @@ ROUTER_API_KEY_ENV = "EMISSARY_ROUTER_API_KEY"
 # protocol translation; billed cost comes from the OR key's usage delta, never
 # from ER telemetry (pricing zeros are deliberate).
 if os.environ.get("EMISSARY_ROUTER_BENCH_EXTRAS"):
-    # Candidate under evaluation (2026-08-15, boss request): not in the serving
-    # roster until it passes the lifecycle gates. OpenRouter listing pricing.
+    # Candidate under evaluation: impact test serves it on our own vLLM at the
+    # saturation-derived internal rates (A100 @ $3/h: 0.19 cold-in / 0.04 cache-hit
+    # / 0.75 out).
     CATALOG["qwen3.8-27b"] = ModelSpec(
         name="qwen3.8-27b",
         providers={"openrouter": "qwen/qwen3.8-27b", "vllm": "qwen/qwen3.8-27b"},
         default_provider="openrouter",
         pricing=TokenPricing(
-            input=0.45,
-            output=3.20,
-            cache_read=0.05,
-            cache_write_5m=0.45,
-            cache_write_1h=0.45,
+            input=0.19,
+            output=0.75,
+            cache_read=0.04,
+            cache_write_5m=0.19,
+            cache_write_1h=0.19,
         ),
     )
     # Candidate under evaluation (2026-08-22, boss request): same lifecycle as
@@ -276,6 +275,20 @@ if os.environ.get("EMISSARY_ROUTER_BENCH_EXTRAS"):
             cache_read=0.01,
             cache_write_5m=0.10,
             cache_write_1h=0.10,
+        ),
+    )
+    # Impact-test alias: the emissary-qwen-router classifier labels deepseek by
+    # its snapshot name. Same serving id/pricing as the base entry.
+    CATALOG["deepseek-v4-flash-0731"] = ModelSpec(
+        name="deepseek-v4-flash-0731",
+        providers={"openrouter": "deepseek/deepseek-v4-flash-0731"},
+        default_provider="openrouter",
+        pricing=TokenPricing(
+            input=0.22,
+            output=0.66,
+            cache_read=0.007,
+            cache_write_5m=0.22,
+            cache_write_1h=0.22,
         ),
     )
     CATALOG["openrouter-auto"] = ModelSpec(
