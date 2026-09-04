@@ -51,6 +51,21 @@ CATALOG: dict[str, ModelSpec] = {
             cache_write_1h=0.22,
         ),
     ),
+    # Snapshot-named alias of deepseek-v4-flash (same serving id and pricing): the
+    # emissary-qwen-router classifier labels deepseek by its snapshot name.
+    # Promoted from the bench-only block 2026-09-04.
+    "deepseek-v4-flash-0731": ModelSpec(
+        name="deepseek-v4-flash-0731",
+        providers={"openrouter": "deepseek/deepseek-v4-flash-0731"},
+        default_provider="openrouter",
+        pricing=TokenPricing(
+            input=0.22,
+            output=0.66,
+            cache_read=0.007,
+            cache_write_5m=0.22,
+            cache_write_1h=0.22,
+        ),
+    ),
     "gpt-5.6-luna": ModelSpec(
         name="gpt-5.6-luna",
         # Default via the native OpenAI Responses API (reasoning models run best
@@ -278,18 +293,30 @@ if os.environ.get("EMISSARY_ROUTER_BENCH_EXTRAS"):
             cache_write_1h=0.10,
         ),
     )
-    # Impact-test alias: the emissary-qwen-router classifier labels deepseek by
-    # its snapshot name. Same serving id/pricing as the base entry.
-    CATALOG["deepseek-v4-flash-0731"] = ModelSpec(
-        name="deepseek-v4-flash-0731",
-        providers={"openrouter": "deepseek/deepseek-v4-flash-0731"},
+    # GLM 5.3 candidates (2026-09-04, OpenRouter only). Z.ai official pricing;
+    # caching is implicit as on glm-5.2 (no write premium: cache_write == input).
+    CATALOG["glm-5.3-flash"] = ModelSpec(
+        name="glm-5.3-flash",
+        providers={"openrouter": "z-ai/glm-5.3-flash"},
         default_provider="openrouter",
         pricing=TokenPricing(
-            input=0.22,
-            output=0.66,
-            cache_read=0.007,
-            cache_write_5m=0.22,
-            cache_write_1h=0.22,
+            input=0.15,
+            output=0.50,
+            cache_read=0.03,
+            cache_write_5m=0.15,
+            cache_write_1h=0.15,
+        ),
+    )
+    CATALOG["glm-5.3"] = ModelSpec(
+        name="glm-5.3",
+        providers={"openrouter": "z-ai/glm-5.3"},
+        default_provider="openrouter",
+        pricing=TokenPricing(
+            input=1.40,
+            output=4.40,
+            cache_read=0.26,
+            cache_write_5m=1.40,
+            cache_write_1h=1.40,
         ),
     )
     CATALOG["openrouter-auto"] = ModelSpec(

@@ -73,6 +73,7 @@ def test_catalog_contains_supported_models() -> None:
     # (see test_routing_order_is_by_price_not_dict_order), so assert membership, not order.
     assert set(CATALOG) == {
         "deepseek-v4-flash",
+        "deepseek-v4-flash-0731",  # snapshot-named alias (same pricing), promoted 2026-09-04
         "gpt-5.6-luna",
         "gemini-3.1-flash-lite",
         "kimi-k2.7-code",
@@ -109,6 +110,7 @@ def test_routing_order_is_by_price_not_dict_order(monkeypatch: pytest.MonkeyPatc
     config = _config(models={name: True for name in reordered})
     assert config.enabled_models() == [
         "deepseek-v4-flash",
+        "deepseek-v4-flash-0731",  # same cost_score; (cost_score, name) tie-break
         "gpt-5.6-luna",
         "gemini-3.1-flash-lite",
         "kimi-k2.7-code",

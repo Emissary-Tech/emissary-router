@@ -16,7 +16,8 @@ from emissary_router.config import AppConfig, ProviderConfig
 from emissary_router.schemas import AnthropicRequest, RequestContext, RouteDecision
 from emissary_router.providers.registry import build_provider
 from emissary_router.routing.classifier import ClassifierClient
-from emissary_router.providers.thinking import always_on_reasoning_models
+from emissary_router.routing.labels import collapse_effort_labels, forced_effort_for
+from emissary_router.providers.thinking import always_on_reasoning_models, force_effort
 from emissary_router.routing.cache_cost import extract_request_cost_features
 from emissary_router.routing.policy import choose_model
 from emissary_router.routing.request_to_classifier_input import request_to_classifier_input
@@ -80,6 +81,7 @@ class RouterPipeline:
         # offline analysis (tau sweeps, calibration) can replay decisions; stays
         # None on the single-model and classifier-fallback paths.
         probs: dict[str, float] | None = None
+        label_winner: dict[str, str] = {}
         # A single-model config forces the decision — skip classification entirely.
         # This is also what lets a config serve models the classifier has no head
         # for (e.g. the benchmark-only openrouter-auto passthrough entry).
@@ -96,7 +98,11 @@ class RouterPipeline:
                 logger.warning("classifier failed; routing to default model: %s", exc)
                 decision = self._default_decision(reason="fallback: router_issue")
             else:
-                probs = probabilities
+                # effort-suffixed heads (model@low ...) collapse to base models for
+                # routing; the winning variant decides the forced effort below
+                labeled_probs = probabilities
+                probabilities, label_winner = collapse_effort_labels(probabilities)
+                probs = labeled_probs
                 missing_labels = self._missing_probability_labels(probabilities)
                 if missing_labels:
                     self._record_failure(
@@ -126,6 +132,10 @@ class RouterPipeline:
                 )
         model = self._config.resolve_model(decision.model_name)
         provider = self._providers[model.provider]
+        chosen_label = label_winner.get(decision.model_name)
+        forced_effort = forced_effort_for(chosen_label)
+        if forced_effort:
+            force_effort(body, forced_effort)
 
         context = RequestContext(
             request_id=request_id,
@@ -158,7 +168,8 @@ class RouterPipeline:
                 duration_ms=round((time.time() - started_at) * 1000, 3),
                 http_status=_int_or_none(provider_metadata.get("http_status")),
                 raw_event=_routed_raw_event(
-                    provider_metadata, model.model_id, probs, self._config.confidence
+                    provider_metadata, model.model_id, probs, self._config.confidence,
+                    label=chosen_label if forced_effort else None, forced_effort=forced_effort,
                 ),
                 **usage_tokens(usage),
             )
@@ -239,6 +250,8 @@ def _routed_raw_event(
     requested_model_id: str,
     probabilities: dict[str, float] | None = None,
     tau: float | None = None,
+    label: str | None = None,
+    forced_effort: str | None = None,
 ) -> str | None:
     """For dynamic-router calls (openrouter/auto), keep the actually-routed model
     and the provider's own credit cost — the response is the only place they exist,
@@ -259,6 +272,9 @@ def _routed_raw_event(
         payload["probs"] = {k: round(v, 4) for k, v in probabilities.items()}
         if tau is not None:
             payload["tau"] = tau
+    if forced_effort:
+        payload["label"] = label
+        payload["forced_effort"] = forced_effort
     return json.dumps(payload) if payload else None
 
 

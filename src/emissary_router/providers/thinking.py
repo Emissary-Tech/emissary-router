@@ -99,6 +99,12 @@ THINKING_CAPABILITIES = {
     # gpt-5.6 series (OpenAI Responses API): reasoning is the provider default;
     # effort vocabulary none/low/medium/high/xhigh/max — "minimal" does NOT exist
     # (snaps to low), and "none" does, so thinking can be disabled.
+    # snapshot-named alias of deepseek-v4-flash (same contract)
+    "deepseek-v4-flash-0731": ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=False,
+        max_effort="xhigh",
+    ),
     "gpt-5.6-sol": ModelThinkingCapabilities(
         accepts_effort_param=True,
         accepts_adaptive_thinking=False,
@@ -147,9 +153,15 @@ if os.environ.get("EMISSARY_ROUTER_BENCH_EXTRAS"):
         max_effort="xhigh",
         supported_efforts=("low", "medium", "xhigh"),
     )
-    THINKING_CAPABILITIES["deepseek-v4-flash-0731"] = ModelThinkingCapabilities(
+    # GLM 5.3 candidates — same reasoning contract as glm-5.2 (effort param, OpenRouter path)
+    THINKING_CAPABILITIES["glm-5.3-flash"] = ModelThinkingCapabilities(
         accepts_effort_param=True,
-        accepts_adaptive_thinking=False,
+        accepts_adaptive_thinking=True,
+        max_effort="xhigh",
+    )
+    THINKING_CAPABILITIES["glm-5.3"] = ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=True,
         max_effort="xhigh",
     )
     THINKING_CAPABILITIES["openrouter-auto"] = ModelThinkingCapabilities(
@@ -423,3 +435,30 @@ def _int_or_none(value: Any) -> int | None:
 
 def _bool_or_none(value: Any) -> bool | None:
     return value if isinstance(value, bool) else None
+
+
+def force_effort(body: dict[str, Any], level: str) -> list[str]:
+    """Override the request's effort with ``level`` everywhere a client may have put
+    it (Anthropic ``output_config.effort``, OpenAI-style ``reasoning.effort``,
+    ``thinking.effort``/``reasoning_effort``, top-level keys), so every provider path
+    reads the forced value. Used when a classifier label carries an effort suffix."""
+    changes: list[str] = []
+    oc = body.get("output_config")
+    if not isinstance(oc, dict):
+        oc = {}
+        body["output_config"] = oc
+    if oc.get("effort") != level:
+        changes.append(f"output_config.effort={oc.get('effort')}->{level}")
+        oc["effort"] = level
+    for container_key in ("reasoning", "thinking"):
+        container = body.get(container_key)
+        if isinstance(container, dict):
+            for k in ("effort", "reasoning_effort"):
+                if k in container and container[k] != level:
+                    changes.append(f"{container_key}.{k}={container[k]}->{level}")
+                    container[k] = level
+    for k in ("effort", "reasoning_effort"):
+        if k in body and body[k] != level:
+            changes.append(f"{k}={body[k]}->{level}")
+            body[k] = level
+    return changes
