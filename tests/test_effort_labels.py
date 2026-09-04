@@ -52,3 +52,17 @@ def test_raw_event_records_label_and_forced_effort():
     # no suffix chosen -> keys absent (legacy shape preserved)
     raw2 = _routed_raw_event({}, "x", probabilities={"a": 0.5}, tau=0.65)
     assert "forced_effort" not in json.loads(raw2)
+
+
+def test_suffix_only_classifier_routes_as_base_with_forced_effort():
+    # the deployed classifier has no plain "gpt-5.6-luna" head — only the three variants
+    probs = {"gpt-5.6-luna@low": 0.31, "gpt-5.6-luna@medium": 0.82, "gpt-5.6-luna@high": 0.55,
+             "claude-opus-5": 0.40}
+    base, winner = collapse_effort_labels(probs)
+    assert base["gpt-5.6-luna"] == 0.82                 # max over variants gates the model
+    assert "gpt-5.6-luna@medium" not in base              # policy/pricing/cache see the base name only
+    assert winner["gpt-5.6-luna"] == "gpt-5.6-luna@medium"
+    assert forced_effort_for(winner["gpt-5.6-luna"]) == "medium"
+    body = {"output_config": {"effort": "high"}}          # what Claude Code sent
+    force_effort(body, forced_effort_for(winner["gpt-5.6-luna"]))
+    assert body["output_config"]["effort"] == "medium"    # only the request effort changes
