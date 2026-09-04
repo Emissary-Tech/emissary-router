@@ -47,3 +47,22 @@ def forced_effort_for(label: str | None) -> str | None:
     if not label:
         return None
     return split_label(label)[1]
+
+
+def select_forced_effort(
+    label_winner: dict[str, str],
+    base_probs: dict[str, float],
+    model_name: str,
+    tau: float,
+) -> str | None:
+    """Effort to force onto the request for the served model.
+
+    The winning variant's effort applies only when the model's own collapsed head
+    clears the gate — i.e. the classifier actually selected that (model, effort).
+    A default served as the fallback (nothing confident; the default is gate-exempt)
+    keeps the client's effort: the classifier had no confident opinion to impose and
+    the fallback is meant to be the safe path.
+    """
+    if base_probs.get(model_name, 0.0) < tau:
+        return None
+    return forced_effort_for(label_winner.get(model_name))

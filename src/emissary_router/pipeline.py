@@ -16,7 +16,7 @@ from emissary_router.config import AppConfig, ProviderConfig
 from emissary_router.schemas import AnthropicRequest, RequestContext, RouteDecision
 from emissary_router.providers.registry import build_provider
 from emissary_router.routing.classifier import ClassifierClient
-from emissary_router.routing.labels import collapse_effort_labels, forced_effort_for
+from emissary_router.routing.labels import collapse_effort_labels, select_forced_effort
 from emissary_router.providers.thinking import always_on_reasoning_models, force_effort
 from emissary_router.routing.cache_cost import extract_request_cost_features
 from emissary_router.routing.policy import choose_model
@@ -82,6 +82,7 @@ class RouterPipeline:
         # None on the single-model and classifier-fallback paths.
         probs: dict[str, float] | None = None
         label_winner: dict[str, str] = {}
+        base_probs: dict[str, float] = {}
         # A single-model config forces the decision — skip classification entirely.
         # This is also what lets a config serve models the classifier has no head
         # for (e.g. the benchmark-only openrouter-auto passthrough entry).
@@ -103,6 +104,7 @@ class RouterPipeline:
                 labeled_probs = probabilities
                 probabilities, label_winner = collapse_effort_labels(probabilities)
                 probs = labeled_probs
+                base_probs = probabilities
                 missing_labels = self._missing_probability_labels(probabilities)
                 if missing_labels:
                     self._record_failure(
@@ -132,8 +134,15 @@ class RouterPipeline:
                 )
         model = self._config.resolve_model(decision.model_name)
         provider = self._providers[model.provider]
+        # The winning variant's effort is forced only when the served model's own
+        # head cleared the gate — i.e. the classifier actually selected that
+        # (model, effort). A default served as the fallback (nothing confident,
+        # default gate-exempt) keeps the client's effort: the classifier had no
+        # confident opinion to impose, and the fallback is meant to be the safe path.
         chosen_label = label_winner.get(decision.model_name)
-        forced_effort = forced_effort_for(chosen_label)
+        forced_effort = select_forced_effort(
+            label_winner, base_probs, decision.model_name, self._config.confidence
+        )
         if forced_effort:
             force_effort(body, forced_effort)
 
@@ -222,8 +231,10 @@ class RouterPipeline:
         )
 
     def _missing_probability_labels(self, probabilities: dict[str, float]) -> list[str]:
-        expected = set(self._config.enabled_models())
-        expected.add(self._config.default)
+        # The default is gate-exempt (it serves whenever nothing else clears tau), so
+        # it needs no head: a classifier trained without the anchor model (e.g. an
+        # open-roster or effort-variant deployment) still routes correctly.
+        expected = set(self._config.enabled_models()) - {self._config.default}
         return sorted(label for label in expected if label not in probabilities)
 
     def _cost_usd(self, model_name: str, usage: Usage) -> float | None:

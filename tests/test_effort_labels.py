@@ -4,7 +4,7 @@ import json
 
 from emissary_router.pipeline import _routed_raw_event
 from emissary_router.providers.thinking import force_effort
-from emissary_router.routing.labels import collapse_effort_labels, forced_effort_for, split_label
+from emissary_router.routing.labels import collapse_effort_labels, forced_effort_for, select_forced_effort, split_label
 
 
 def test_split_label_only_recognizes_effort_suffixes():
@@ -66,3 +66,33 @@ def test_suffix_only_classifier_routes_as_base_with_forced_effort():
     body = {"output_config": {"effort": "high"}}          # what Claude Code sent
     force_effort(body, forced_effort_for(winner["gpt-5.6-luna"]))
     assert body["output_config"]["effort"] == "medium"    # only the request effort changes
+
+
+def test_default_needs_no_classifier_head(monkeypatch):
+    from emissary_router.config import AppConfig
+    from emissary_router.pipeline import RouterPipeline
+    cfg = AppConfig.model_validate({
+        "models": {"claude-opus-5": True, "claude-haiku-4.5": True, "gemini-3.1-flash-lite": True},
+        "default": "claude-opus-5", "confidence": 0.8,
+    })
+    pipe = RouterPipeline.__new__(RouterPipeline); pipe._config = cfg
+    # classifier has heads for the cheap models only — the anchor is gate-exempt
+    assert pipe._missing_probability_labels({"claude-haiku-4.5": 0.2, "gemini-3.1-flash-lite": 0.9}) == []
+    assert pipe._missing_probability_labels({"claude-haiku-4.5": 0.2}) == ["gemini-3.1-flash-lite"]
+
+
+def test_forced_effort_only_when_served_head_clears_gate():
+    # Effort-router-test shape: opus has only @variants; it is the gate-exempt default
+    labeled = {"claude-opus-5@low": 0.39, "claude-opus-5@medium": 0.55, "claude-opus-5@high": 0.45,
+               "deepseek-v4-flash-0731@low": 0.95, "deepseek-v4-flash-0731@high": 0.11}
+    base, winner = collapse_effort_labels(labeled)
+    # confident cheap model: its winning variant's effort is forced
+    assert select_forced_effort(winner, base, "deepseek-v4-flash-0731", 0.65) == "low"
+    # default served as the fallback (best opus variant 0.55 < tau): keep the client's effort
+    assert select_forced_effort(winner, base, "claude-opus-5", 0.65) is None
+    # default served with its own head confident: the classifier's effort applies
+    labeled["claude-opus-5@medium"] = 0.93
+    base, winner = collapse_effort_labels(labeled)
+    assert select_forced_effort(winner, base, "claude-opus-5", 0.65) == "medium"
+    # classifier fallback / single-model paths carry no probs at all -> nothing forced
+    assert select_forced_effort({}, {}, "claude-opus-5", 0.65) is None
