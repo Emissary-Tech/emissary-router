@@ -208,6 +208,22 @@ class AppConfig(BaseModel):
     models: dict[str, ModelEntry]
     default: str
     confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+    # One switch for the cost-aware extension below (length-head output pricing +
+    # kappa_usd). Off by default: a classifier that starts emitting "<model>:len" heads
+    # changes nothing until a deployment opts in, and opting out again is a config
+    # edit, not a code revert. With it off, kappa_usd and len_correction are inert.
+    cost_aware: bool = False
+    # Cost-aware selection among the confident candidates (plus the gate-exempt default):
+    #     score_m = estimated_cost_m + kappa_usd * (1 - P_m)
+    # kappa_usd is the dollar penalty charged to one expected failure ("what a miss
+    # costs us"); 0 keeps the plain cheapest-confident-candidate comparison. `confidence`
+    # stays the hard floor (tau_min): a model below it is never a candidate.
+    kappa_usd: float = Field(default=0.0, ge=0.0)
+    # Classifiers trained with length heads ("<model>:len" = that model's normalized log
+    # output length on this request, see routing/labels.py) give a per-model expected
+    # output size; exp(mean log) runs short on heavy tails, so one global multiplier
+    # corrects it (fit offline; 1.0 = raw). Ignored when the classifier has no length heads.
+    len_correction: float = Field(default=1.0, gt=0.0)
     # Deprecated no-op, accepted so configs written while escalation was a toggle
     # still load. Upward escalation (route to the cheapest confident model when the
     # default's own head is below the gate, even if it costs more) is now always on.

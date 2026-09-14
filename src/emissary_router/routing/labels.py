@@ -9,7 +9,50 @@ client's own effort stands.
 """
 from __future__ import annotations
 
+from emissary_router.routing.cache_cost import len_to_tokens
+
 EFFORT_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+LEN_SUFFIX = ":len"
+
+
+def split_len_labels(
+    probabilities: dict[str, float],
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Separate length heads from pass heads.
+
+    A classifier trained with length heads emits ``<label>:len`` next to each pass
+    head ``<label>`` (``<label>`` may itself carry an effort suffix). Its value is not
+    a pass probability but that model's normalized log output length on this request
+    (0 = LEN_FLOOR tokens, 1 = LEN_CAP tokens; see cache_cost.len_to_tokens), so it
+    must never reach the confidence gate. Returns (pass_probs, len_by_label).
+    """
+    pass_probs: dict[str, float] = {}
+    len_by_label: dict[str, float] = {}
+    for label, p in probabilities.items():
+        if label.endswith(LEN_SUFFIX):
+            len_by_label[label[: -len(LEN_SUFFIX)]] = p
+        else:
+            pass_probs[label] = p
+    return pass_probs, len_by_label
+
+
+def expected_output_by_model(
+    len_by_label: dict[str, float],
+    label_winner: dict[str, str],
+    correction: float = 1.0,
+) -> dict[str, int]:
+    """Per base model, the expected output tokens implied by the length head of its
+    winning label (the variant the router would actually serve; a plain label falls
+    back to the base's own head). Models without a length head are absent and keep
+    the gateway's rolling request-level estimate."""
+    out: dict[str, int] = {}
+    for base, label in label_winner.items():
+        y = len_by_label.get(label)
+        if y is None:
+            y = len_by_label.get(base)
+        if y is not None:
+            out[base] = len_to_tokens(y, correction)
+    return out
 
 
 def split_label(label: str) -> tuple[str, str | None]:

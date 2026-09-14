@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from emissary_router.config import AppConfig
 from emissary_router.routing.cache_cost import (
+    EstimatedCost,
     RequestCostFeatures,
     estimate_cost,
     is_cheaper,
@@ -15,8 +16,16 @@ def choose_model(
     skip_models: frozenset[str] | set[str] = frozenset(),
     cost_features: RequestCostFeatures | None = None,
     cache_ledger=None,
+    expected_output_by_model: dict[str, int] | None = None,
 ) -> RouteDecision:
-    """Confidence-gated, cache-aware routing.
+    """Confidence-gated, cache-aware, cost-aware routing.
+
+    `expected_output_by_model` (from the classifier's length heads, see
+    routing/labels.py) prices each candidate's output at ITS OWN predicted size;
+    models missing from it use the request-level rolling estimate. Candidates are
+    then ranked by score = estimated cost + config.kappa_usd * (1 - P(pass)), so a
+    cheap model that is only borderline confident loses to a pricier, surer one once
+    the failure penalty outweighs the saving. kappa_usd = 0 is the plain cost order.
 
     Cache awareness is not a mode: whenever the request's cost features and the cache
     ledger are available (every gateway request), candidates are compared by
@@ -39,7 +48,10 @@ def choose_model(
     reroute it based on its own size estimates.
     """
     if cost_features is not None and cache_ledger is not None:
-        return _cache_aware(config, probabilities, skip_models, cost_features, cache_ledger)
+        return _cache_aware(
+            config, probabilities, skip_models, cost_features, cache_ledger,
+            expected_output_by_model or {},
+        )
     return _price_ordered(config, probabilities, skip_models)
 
 
@@ -90,6 +102,7 @@ def _cache_aware(
     skip_models: frozenset[str] | set[str],
     cost_features: RequestCostFeatures,
     cache_ledger,
+    expected_output_by_model: dict[str, int],
 ) -> RouteDecision:
     candidates: list[str] = []
     if config.default not in skip_models:
@@ -105,16 +118,41 @@ def _cache_aware(
         # default / default-unsuitable fallbacks.
         return _price_ordered(config, probabilities, skip_models)
 
-    estimates = {
-        model_name: estimate_cost(config, model_name, cost_features, cache_ledger)
-        for model_name in candidates
-    }
-    estimated_costs = {name: cost.to_dict() for name, cost in estimates.items()}
-    best = min(estimates.values(), key=lambda estimate: estimate.total_usd)
+    estimates: dict[str, EstimatedCost] = {}
+    for model_name in candidates:
+        expected = expected_output_by_model.get(model_name)
+        estimates[model_name] = (
+            estimate_cost(config, model_name, cost_features, cache_ledger)
+            if expected is None
+            else estimate_cost(config, model_name, cost_features, cache_ledger, expected)
+        )
+    kappa = config.kappa_usd if config.cost_aware else 0.0
+
+    def score(estimate: EstimatedCost) -> float:
+        # The default is gate-exempt and may have no head at all (open-roster /
+        # anchorless classifiers); it is the safe path, so a missing head counts as
+        # certain rather than as a sure failure.
+        fallback_p = 1.0 if estimate.model_name == config.default else 0.0
+        p = probabilities.get(estimate.model_name, fallback_p)
+        return estimate.total_usd + kappa * (1.0 - p)
+
+    class _Scored:
+        """The same estimate seen through the score, for the strict `is_cheaper` compare."""
+
+        def __init__(self, estimate: EstimatedCost):
+            self.model_name = estimate.model_name
+            self.total_usd = score(estimate)
+
+    estimated_costs = {}
+    for name, cost in estimates.items():
+        as_dict = cost.to_dict()
+        as_dict["score_usd"] = round(score(cost), 8)
+        estimated_costs[name] = as_dict
+    best = min(estimates.values(), key=score)
     default_estimate = estimates.get(config.default)
 
     # `is_cheaper` is strict, so when best IS the default this is always a stay.
-    if default_estimate is not None and not is_cheaper(best, default_estimate):
+    if default_estimate is not None and not is_cheaper(_Scored(best), _Scored(default_estimate)):
         # Charm-style escalation (always on): every confident candidate priced above
         # the default only stays on the default when the default's own head clears
         # the gate. If the default is unconfident about this request, send it to
@@ -125,7 +163,7 @@ def _cache_aware(
             and probabilities.get(config.default, 0.0) < config.confidence
         ):
             non_default = [e for n, e in estimates.items() if n != config.default]
-            up = min(non_default, key=lambda estimate: estimate.total_usd)
+            up = min(non_default, key=score)
             return RouteDecision(
                 model_name=up.model_name,
                 reason="cache_aware:escalate_default_unconfident",

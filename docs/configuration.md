@@ -137,6 +137,29 @@ Float in `[0, 1]`, default `0.8`. Non-default models must meet this classifier
 probability before the router is allowed to consider them. Higher `confidence` = more
 conservative (stays on `default` more often). See [routing](#routing).
 
+### `cost_aware`
+
+Boolean, default `false`. Master switch for the cost-aware extension: length-head
+output pricing and `kappa_usd`. While `false`, a classifier's `<model>:len` heads are
+logged but ignored and `kappa_usd` / `len_correction` are inert, so routing is exactly
+the pre-extension behaviour. Turn it on per deployment (benchmark conditions set it
+explicitly); turning it off again is a config edit.
+
+### `kappa_usd`
+
+Float `>= 0`, default `0`. Dollar penalty charged to one expected failure when the
+confident candidates are compared: `score = estimated cost + kappa_usd × (1 − P(pass))`.
+`0` keeps the plain cheapest-confident-candidate comparison; raise it to make a cheap
+but only borderline-confident model lose to a pricier, surer one. `confidence` stays the
+hard floor either way. See [routing](#routing).
+
+### `len_correction`
+
+Float `> 0`, default `1.0`. Only meaningful with a classifier that has length heads
+(`<model>:len`, see [routing](#routing)): a global multiplier applied to the expected
+output tokens read from those heads, because a mean-of-log estimate runs short on
+heavy-tailed outputs. Fit it offline; leave at `1.0` otherwise.
+
 ### `policy` (deprecated)
 
 Older configs may contain a `policy` field; it is accepted and ignored. Routing is
@@ -184,6 +207,17 @@ Routing is confidence-gated and cache-aware by default:
    observed cache reads (the cheap cache-read rate), while switching to a cold model is
    priced at full input plus a cache write. The cheapest wins; the default stays unless
    a candidate is strictly cheaper _after_ cache effects.
+3. **Length heads.** A classifier trained with length heads emits `<model>:len` next to
+   each pass head — that model's predicted output size for this request (normalized
+   log tokens: 100 → 0, 32k → 1). When present, each candidate's output is priced at
+   its own predicted size instead of the request-level rolling estimate, so a
+   per-token-cheap model that would write 20k tokens loses to a terse pricier one.
+   Without such heads nothing changes.
+4. **Failure penalty.** With `kappa_usd > 0` candidates are ranked by
+   `cost + kappa_usd × (1 − P(pass))` rather than cost alone (step 2 is the
+   `kappa_usd = 0` case). Both the pass heads' values, the length heads' values and
+   the serving `tau` / `kappa_usd` are kept in each event's `raw_event` for offline
+   replay.
 
 Context limits are deliberately not a routing input: a request that exceeds the
 served model's window surfaces as a normalized `prompt is too long` 400 and the

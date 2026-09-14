@@ -16,7 +16,12 @@ from emissary_router.config import AppConfig, ProviderConfig
 from emissary_router.schemas import AnthropicRequest, RequestContext, RouteDecision
 from emissary_router.providers.registry import build_provider
 from emissary_router.routing.classifier import ClassifierClient
-from emissary_router.routing.labels import collapse_effort_labels, select_forced_effort
+from emissary_router.routing.labels import (
+    collapse_effort_labels,
+    expected_output_by_model,
+    select_forced_effort,
+    split_len_labels,
+)
 from emissary_router.providers.thinking import always_on_reasoning_models, force_effort
 from emissary_router.routing.cache_cost import extract_request_cost_features
 from emissary_router.routing.policy import choose_model
@@ -102,9 +107,17 @@ class RouterPipeline:
                 # effort-suffixed heads (model@low ...) collapse to base models for
                 # routing; the winning variant decides the forced effort below
                 labeled_probs = probabilities
+                # length heads (<label>:len) are per-model output-size predictions, not
+                # pass probabilities: split them off before the gate/collapse see them
+                probabilities, len_by_label = split_len_labels(probabilities)
                 probabilities, label_winner = collapse_effort_labels(probabilities)
                 probs = labeled_probs
                 base_probs = probabilities
+                expected_output = (
+                    expected_output_by_model(len_by_label, label_winner, self._config.len_correction)
+                    if self._config.cost_aware
+                    else {}
+                )
                 missing_labels = self._missing_probability_labels(probabilities)
                 if missing_labels:
                     self._record_failure(
@@ -131,6 +144,7 @@ class RouterPipeline:
                     skip_models=skip,
                     cost_features=cost_features,
                     cache_ledger=self._cache_ledger,
+                    expected_output_by_model=expected_output,
                 )
         model = self._config.resolve_model(decision.model_name)
         provider = self._providers[model.provider]
@@ -179,6 +193,7 @@ class RouterPipeline:
                 raw_event=_routed_raw_event(
                     provider_metadata, model.model_id, probs, self._config.confidence,
                     label=chosen_label if forced_effort else None, forced_effort=forced_effort,
+                    kappa=self._config.kappa_usd if self._config.cost_aware else None,
                 ),
                 **usage_tokens(usage),
             )
@@ -263,6 +278,7 @@ def _routed_raw_event(
     tau: float | None = None,
     label: str | None = None,
     forced_effort: str | None = None,
+    kappa: float | None = None,
 ) -> str | None:
     """For dynamic-router calls (openrouter/auto), keep the actually-routed model
     and the provider's own credit cost — the response is the only place they exist,
@@ -283,6 +299,8 @@ def _routed_raw_event(
         payload["probs"] = {k: round(v, 4) for k, v in probabilities.items()}
         if tau is not None:
             payload["tau"] = tau
+        if kappa:
+            payload["kappa_usd"] = kappa
     if forced_effort:
         payload["label"] = label
         payload["forced_effort"] = forced_effort
