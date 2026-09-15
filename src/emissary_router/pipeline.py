@@ -24,6 +24,7 @@ from emissary_router.routing.labels import (
 )
 from emissary_router.providers.thinking import always_on_reasoning_models, force_effort
 from emissary_router.routing.cache_cost import extract_request_cost_features
+from emissary_router.routing.calibration import to_probabilities
 from emissary_router.routing.policy import choose_model
 from emissary_router.routing.request_to_classifier_input import request_to_classifier_input
 from emissary_router.telemetry import (
@@ -99,14 +100,19 @@ class RouterPipeline:
             # in ClassifierClient) or returns an unparseable response, fall back to
             # the configured default model rather than failing the request.
             try:
-                probabilities = await self._classifier.predict(classifier_input)
+                raw_values = await self._classifier.predict(classifier_input)
             except (httpx.HTTPError, KeyError, IndexError, ValueError, TypeError) as exc:
                 logger.warning("classifier failed; routing to default model: %s", exc)
                 decision = self._default_decision(reason="fallback: router_issue")
             else:
+                # The classifier returns logits (or probs); the gateway reasons with ONE
+                # probability set = sigmoid(z + confidence_bias) for pass heads (length
+                # heads unshifted). Telemetry keeps the unshifted probabilities + the bias.
+                fmt = self._config.router.data_format
+                labeled_probs = to_probabilities(raw_values, fmt)
+                probabilities = to_probabilities(raw_values, fmt, self._config.confidence_bias)
                 # effort-suffixed heads (model@low ...) collapse to base models for
                 # routing; the winning variant decides the forced effort below
-                labeled_probs = probabilities
                 # length heads (<label>:len) are per-model output-size predictions, not
                 # pass probabilities: split them off before the gate/collapse see them
                 probabilities, len_by_label = split_len_labels(probabilities)
@@ -194,6 +200,7 @@ class RouterPipeline:
                     provider_metadata, model.model_id, probs, self._config.confidence,
                     label=chosen_label if forced_effort else None, forced_effort=forced_effort,
                     kappa=self._config.kappa_usd if self._config.cost_aware else None,
+                    bias=self._config.confidence_bias,
                 ),
                 **usage_tokens(usage),
             )
@@ -279,6 +286,7 @@ def _routed_raw_event(
     label: str | None = None,
     forced_effort: str | None = None,
     kappa: float | None = None,
+    bias: float = 0.0,
 ) -> str | None:
     """For dynamic-router calls (openrouter/auto), keep the actually-routed model
     and the provider's own credit cost — the response is the only place they exist,
@@ -301,6 +309,8 @@ def _routed_raw_event(
             payload["tau"] = tau
         if kappa:
             payload["kappa_usd"] = kappa
+        if bias:
+            payload["confidence_bias"] = bias
     if forced_effort:
         payload["label"] = label
         payload["forced_effort"] = forced_effort

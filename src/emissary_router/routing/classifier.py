@@ -21,10 +21,12 @@ class ClassifierClient:
         payload = {
             "model": self._config.router_model,
             "input": classifier_input,
-            "data_format": "probs",
+            "data_format": self._config.data_format,
         }
         data = await self._post_with_retry(headers, payload)
-        return data["data"][0]["probs"]
+        # raw classifier values in the requested format ("logits" or "probs"); the
+        # pipeline turns them into probabilities (routing/calibration.py)
+        return data["data"][0][self._config.data_format]
 
     async def _post_with_retry(self, headers: dict[str, str], payload: dict) -> dict:
         # Retry transient transport failures (connect/read timeouts, dropped

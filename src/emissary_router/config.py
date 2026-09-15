@@ -186,6 +186,11 @@ class RouterConfig(BaseModel):
     # intentionally not shown in the shipped config. `router_model` is user-facing.
     url: str = DEFAULT_CLASSIFICATION_URL
     router_model: str = "emissary-model-router-shared"
+    # What to ask the classifier for. "logits" (default): raw head logits, turned into
+    # probabilities by the gateway itself (sigmoid(z + confidence_bias) for pass heads,
+    # sigmoid(z) for "<label>:len" heads) — exact, no inversion of rounded probabilities.
+    # "probs": the platform's sigmoid output, shifted via logit(p) + confidence_bias.
+    data_format: Literal["probs", "logits"] = "logits"
     timeout_seconds: float = 30
     max_retries: int = Field(default=5, ge=0)
     retry_backoff_seconds: float = Field(default=0.5, ge=0.0)
@@ -208,6 +213,16 @@ class AppConfig(BaseModel):
     models: dict[str, ModelEntry]
     default: str
     confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+    # Global logit shift applied to every pass head right after classification:
+    #     p = sigmoid(logit_or_z + confidence_bias)
+    # That shifted p is THE probability the gateway reasons with — the confidence gate,
+    # the default's escalation check, the forced-effort check and the kappa_usd score all
+    # read it. Length heads ("<label>:len") are never shifted. Telemetry keeps the
+    # unshifted probabilities plus this value so decisions can be replayed. Fitted per
+    # classifier release so a fixed `confidence` keeps the same deflection level on a
+    # frozen prompt set (er-bench docs/CALIBRATION.md). 0.0 = unshifted, bit-identical
+    # to before the field existed.
+    confidence_bias: float = Field(default=0.0, ge=-10.0, le=10.0)
     # One switch for the cost-aware extension below (length-head output pricing +
     # kappa_usd). Off by default: a classifier that starts emitting "<model>:len" heads
     # changes nothing until a deployment opts in, and opting out again is a config
