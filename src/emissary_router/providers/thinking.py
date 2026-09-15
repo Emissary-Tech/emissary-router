@@ -105,6 +105,11 @@ THINKING_CAPABILITIES = {
         accepts_adaptive_thinking=False,
         max_effort="xhigh",
     ),
+    "deepseek-v4.1-flash": ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=False,
+        max_effort="xhigh",
+    ),
     "gpt-5.6-sol": ModelThinkingCapabilities(
         accepts_effort_param=True,
         accepts_adaptive_thinking=False,

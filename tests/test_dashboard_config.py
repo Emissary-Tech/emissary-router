@@ -37,7 +37,7 @@ def test_get_config_lists_catalog_cheap_first(tmp_path):
     body = client.get("/api/config").json()
     assert body["default"] == "claude-sonnet-5"
     assert body["confidence"] == 0.8
-    assert [m["name"] for m in body["models"]][0] == "deepseek-v4-flash"
+    assert [m["name"] for m in body["models"]][0] == "deepseek-v4.1-flash"  # cheapest catalog entry first
     enabled = {m["name"]: m["enabled"] for m in body["models"]}
     # The three configured models are enabled; catalog-only models (not in this config)
     # show up disabled and toggleable.

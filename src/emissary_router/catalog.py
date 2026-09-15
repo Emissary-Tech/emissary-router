@@ -66,6 +66,19 @@ CATALOG: dict[str, ModelSpec] = {
             cache_write_1h=0.22,
         ),
     ),
+    # 2026-09-15: Charm roster (charm-dsv41 classifier); OpenRouter listing == these rates.
+    "deepseek-v4.1-flash": ModelSpec(
+        name="deepseek-v4.1-flash",
+        providers={"openrouter": "deepseek/deepseek-v4.1-flash"},
+        default_provider="openrouter",
+        pricing=TokenPricing(
+            input=0.15,
+            output=0.60,
+            cache_read=0.003,
+            cache_write_5m=0.15,
+            cache_write_1h=0.15,
+        ),
+    ),
     "gpt-5.6-luna": ModelSpec(
         name="gpt-5.6-luna",
         # Default via the native OpenAI Responses API (reasoning models run best
