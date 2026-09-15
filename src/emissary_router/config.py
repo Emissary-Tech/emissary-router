@@ -239,6 +239,17 @@ class AppConfig(BaseModel):
     # output size; exp(mean log) runs short on heavy tails, so one global multiplier
     # corrects it (fit offline; 1.0 = raw). Ignored when the classifier has no length heads.
     len_correction: float = Field(default=1.0, gt=0.0)
+    # Normalization anchors of the classifier's length heads: the head emits
+    #     y = (log tokens - log len_floor_tokens) / (log len_cap_tokens - log len_floor_tokens)
+    # clipped to [0, 1], and the gateway inverts it with the SAME two constants, so they
+    # must match the values the classifier was trained with (routerbench builder
+    # ROUTER_LEN_FLOOR / ROUTER_LEN_CAP; recorded in that dataset's summary.json
+    # "len_heads"). Defaults are the 32K-contract classifiers' values; a classifier
+    # trained on the uncapped label family uses len_cap_tokens = 131072. Per
+    # deployment, never global: changing the constants under a running classifier
+    # silently rescales every expected-output estimate.
+    len_floor_tokens: int = Field(default=100, ge=1)
+    len_cap_tokens: int = Field(default=32000, ge=2)
     # Deprecated no-op, accepted so configs written while escalation was a toggle
     # still load. Upward escalation (route to the cheapest confident model when the
     # default's own head is below the gate, even if it costs more) is now always on.

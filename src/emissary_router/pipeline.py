@@ -120,7 +120,10 @@ class RouterPipeline:
                 probs = labeled_probs
                 base_probs = probabilities
                 expected_output = (
-                    expected_output_by_model(len_by_label, label_winner, self._config.len_correction)
+                    expected_output_by_model(
+                        len_by_label, label_winner, self._config.len_correction,
+                        self._config.len_cap_tokens, self._config.len_floor_tokens,
+                    )
                     if self._config.cost_aware
                     else {}
                 )

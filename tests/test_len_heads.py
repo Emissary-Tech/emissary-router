@@ -64,6 +64,17 @@ def test_len_to_tokens_inverts_the_training_normalization() -> None:
     assert len_to_tokens(1.7) == LEN_CAP_TOKENS  # clipped, never above the cap
 
 
+def test_len_to_tokens_anchors_follow_the_classifier_training_cap() -> None:
+    # a classifier trained on the uncapped label family (ROUTER_LEN_CAP=131072) maps
+    # y=1.0 to 131072 tokens, and the same y means more tokens than under the 32K anchors
+    assert len_to_tokens(1.0, cap=131072) == 131072
+    assert len_to_tokens(0.0, cap=131072) == LEN_FLOOR_TOKENS
+    assert len_to_tokens(0.5, cap=131072) > len_to_tokens(0.5)
+    assert len_to_tokens(1.0, cap=131072, floor=50) == 131072
+    expected = expected_output_by_model({"glm-5.3": 1.0}, {"glm-5.3": "glm-5.3"}, 1.0, 131072, 100)
+    assert expected["glm-5.3"] == 131072
+
+
 def test_expected_output_follows_the_winning_effort_variant() -> None:
     probs = {
         "gpt-5.6-luna@low": 0.6, "gpt-5.6-luna@low:len": 0.2,

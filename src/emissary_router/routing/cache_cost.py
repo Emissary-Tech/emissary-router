@@ -16,16 +16,24 @@ DEFAULT_EXPECTED_OUTPUT_TOKENS = 1024
 # Length heads ("<model>:len") are trained on
 #     y = (log tokens - log FLOOR) / (log CAP - log FLOOR), clipped to [0, 1]
 # with cap-exhausted runs at 1.0 (routerbench builder, ROUTER_LEN_HEADS=1). The
-# serving inverse below must keep the same constants.
+# serving inverse below must use the same two constants the classifier was trained
+# with: these module values are the 32K-contract defaults, and AppConfig
+# (len_floor_tokens / len_cap_tokens) overrides them per deployment — e.g. 131072 for
+# a classifier trained on the uncapped label family.
 LEN_FLOOR_TOKENS = 100
 LEN_CAP_TOKENS = 32000
 
 
-def len_to_tokens(y: float, correction: float = 1.0) -> int:
+def len_to_tokens(
+    y: float,
+    correction: float = 1.0,
+    cap: float = LEN_CAP_TOKENS,
+    floor: float = LEN_FLOOR_TOKENS,
+) -> int:
     """Invert a length head's sigmoid output into expected output tokens."""
     y = min(max(float(y), 0.0), 1.0)
-    log_span = math.log(LEN_CAP_TOKENS) - math.log(LEN_FLOOR_TOKENS)
-    tokens = math.exp(y * log_span + math.log(LEN_FLOOR_TOKENS))
+    log_span = math.log(cap) - math.log(floor)
+    tokens = math.exp(y * log_span + math.log(floor))
     return max(1, int(round(tokens * correction)))
 
 

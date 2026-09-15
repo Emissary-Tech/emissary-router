@@ -160,6 +160,18 @@ Float `> 0`, default `1.0`. Only meaningful with a classifier that has length he
 output tokens read from those heads, because a mean-of-log estimate runs short on
 heavy-tailed outputs. Fit it offline; leave at `1.0` otherwise.
 
+### `len_cap_tokens` / `len_floor_tokens`
+
+Integers, defaults `32000` / `100`. The normalization anchors of the classifier's
+length heads: a head emits `y = (log tokens − log floor) / (log cap − log floor)`
+clipped to `[0, 1]`, and the gateway inverts it with the same two numbers. They must be
+the values the classifier was trained with (routerbench builder `ROUTER_LEN_CAP` /
+`ROUTER_LEN_FLOOR`, recorded under `len_heads` in that dataset's `summary.json`). The
+defaults are the 32K-contract classifiers' values; a classifier trained on the uncapped
+label family is built with `len_cap_tokens = 131072`. Set them per deployment, never
+by editing the code constants: changing the anchors under a running classifier
+rescales every expected-output estimate.
+
 ### `policy` (deprecated)
 
 Older configs may contain a `policy` field; it is accepted and ignored. Routing is

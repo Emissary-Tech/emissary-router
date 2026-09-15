@@ -9,7 +9,7 @@ client's own effort stands.
 """
 from __future__ import annotations
 
-from emissary_router.routing.cache_cost import len_to_tokens
+from emissary_router.routing.cache_cost import LEN_CAP_TOKENS, LEN_FLOOR_TOKENS, len_to_tokens
 
 EFFORT_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 LEN_SUFFIX = ":len"
@@ -40,6 +40,8 @@ def expected_output_by_model(
     len_by_label: dict[str, float],
     label_winner: dict[str, str],
     correction: float = 1.0,
+    cap: float = LEN_CAP_TOKENS,
+    floor: float = LEN_FLOOR_TOKENS,
 ) -> dict[str, int]:
     """Per base model, the expected output tokens implied by the length head of its
     winning label (the variant the router would actually serve; a plain label falls
@@ -51,7 +53,7 @@ def expected_output_by_model(
         if y is None:
             y = len_by_label.get(base)
         if y is not None:
-            out[base] = len_to_tokens(y, correction)
+            out[base] = len_to_tokens(y, correction, cap, floor)
     return out
 
 
