@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -17,6 +18,7 @@ from emissary_router.providers.registry import build_provider
 from emissary_router.routing.classifier import ClassifierClient
 from emissary_router.providers.thinking import always_on_reasoning_models
 from emissary_router.routing.cache_cost import extract_request_cost_features
+from emissary_router.routing.context_guard import oversized_models
 from emissary_router.routing.policy import choose_model
 from emissary_router.routing.request_to_classifier_input import request_to_classifier_input
 from emissary_router.telemetry import (
@@ -75,6 +77,10 @@ class RouterPipeline:
             body, headers, self._cache_ledger.expected_output_tokens()
         )
 
+        # Models the context-fit guard took out of this request's candidate set
+        # (recorded in telemetry below; empty when the classifier did not run).
+        context_excluded: frozenset[str] = frozenset()
+
         # When the router classifier is unreachable (retries already exhausted in
         # ClassifierClient) or returns an unparseable response, fall back to the
         # configured default model rather than failing the request.
@@ -104,10 +110,16 @@ class RouterPipeline:
             # them to always-on-reasoning models that can't honor that (and that reason
             # on a utility call, wasting cost/latency).
             skip = always_on_reasoning_models() if call_kind == "background" else frozenset()
+            # Context-fit guard: a candidate whose window can't hold this request is
+            # never deviated to (it would only return a context-overflow 400). The
+            # default is never excluded; see routing/context_guard.py.
+            context_excluded = oversized_models(
+                self._config, body, cost_features, self._cache_ledger
+            )
             decision = choose_model(
                 self._config,
                 probabilities,
-                skip_models=skip,
+                skip_models=skip | context_excluded,
                 cost_features=cost_features,
                 cache_ledger=self._cache_ledger,
             )
@@ -144,7 +156,7 @@ class RouterPipeline:
                 cost_usd=self._cost_usd(decision.model_name, usage),
                 duration_ms=round((time.time() - started_at) * 1000, 3),
                 http_status=_int_or_none(provider_metadata.get("http_status")),
-                raw_event=None,
+                raw_event=_raw_event(context_excluded),
                 **usage_tokens(usage),
             )
             self._write(record)
@@ -221,6 +233,14 @@ def _header(headers: dict[str, str], name: str) -> str | None:
 
 def _int_or_none(value: object) -> int | None:
     return int(value) if isinstance(value, int) else None
+
+
+def _raw_event(context_excluded: frozenset[str]) -> str | None:
+    """Extra routing detail for this call's telemetry row, or None when there is none.
+    Kept out of the public dashboard rows; additive keys only."""
+    if not context_excluded:
+        return None
+    return json.dumps({"context_excluded": sorted(context_excluded)})
 
 
 def _cost_usd(price: TokenPricing, usage: Usage) -> float:

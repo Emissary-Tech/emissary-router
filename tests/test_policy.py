@@ -208,7 +208,7 @@ def test_cache_aware_keeps_warm_default_when_candidate_cold_costs_more() -> None
         {
             "gemini-3.1-flash-lite": 0.2,
             "claude-haiku-4.5": 0.95,
-            "claude-sonnet-5": 0.1,
+            "claude-sonnet-5": 0.9,  # default's own head confident: escalation (always on) stays out of the way
         },
         cost_features=features,
         cache_ledger=ledger,
@@ -266,7 +266,7 @@ def test_cache_aware_keeps_warm_default_when_history_dominates_prefix() -> None:
         {
             "gemini-3.1-flash-lite": 0.2,
             "claude-haiku-4.5": 0.95,  # confident and cheaper *when cold*
-            "claude-sonnet-5": 0.1,
+            "claude-sonnet-5": 0.9,  # default's own head confident: escalation (always on) stays out of the way
         },
         cost_features=features,
         cache_ledger=ledger,
@@ -300,7 +300,7 @@ def test_cache_aware_labels_cold_stay_as_default_not_beaten() -> None:
         {
             "claude-sonnet-5": 0.95,  # confident but pricier than the default
             "claude-haiku-4.5": 0.1,
-            "gemini-3.1-flash-lite": 0.1,
+            "gemini-3.1-flash-lite": 0.9,  # default's own head confident: escalation (always on) stays out of the way
         },
         cost_features=_features(),
         cache_ledger=CacheLedger(),

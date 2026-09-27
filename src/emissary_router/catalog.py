@@ -22,6 +22,11 @@ class ModelSpec:
     providers: dict[ProviderName, str]
     default_provider: ProviderName
     pricing: TokenPricing
+    # Tokens the model can hold (input + output), or None when unknown. The
+    # context-fit guard (routing/context_guard.py) never deviates a request to a
+    # model whose window can't hold it; None never excludes anything. Served windows
+    # as listed by OpenRouter and Anthropic (checked 2026-09-28).
+    context_window: int | None = None
 
 
 def cost_score(spec: ModelSpec) -> float:
@@ -44,6 +49,7 @@ CATALOG: dict[str, ModelSpec] = {
         # prefix cache, no write premium) / 0.28 out.
         providers={"openrouter": "deepseek/deepseek-v4-flash"},
         default_provider="openrouter",
+        context_window=1_048_576,
         pricing=TokenPricing(
             input=0.14,
             output=0.28,
@@ -59,15 +65,17 @@ CATALOG: dict[str, ModelSpec] = {
         # OpenRouter is available opt-in ({"provider": "openrouter"}) — it serves the
         # same model through the chat-completions translation, so reasoning behavior
         # differs slightly; use it when no native OpenAI key is available. Cheapest
-        # model in the catalog; caching is automatic (no write premium).
+        # model in the catalog. 2026-08 price sheet: short-context tier, with a
+        # 1.25x cache-write line item (long-context tier is 2x across the board).
         providers={"openai": "gpt-5.6-luna", "openrouter": "openai/gpt-5.6-luna"},
         default_provider="openai",
+        context_window=1_050_000,
         pricing=TokenPricing(
-            input=0.20,
-            output=1.20,
+            input=0.2,
+            output=1.2,
             cache_read=0.02,
-            cache_write_5m=0.20,
-            cache_write_1h=0.20,
+            cache_write_5m=0.25,
+            cache_write_1h=0.25,
         ),
     ),
     "gemini-3.1-flash-lite": ModelSpec(
@@ -80,6 +88,7 @@ CATALOG: dict[str, ModelSpec] = {
         # arrive) — all verified live.
         providers={"openrouter": "google/gemini-3.1-flash-lite", "google": "gemini-3.1-flash-lite"},
         default_provider="openrouter",
+        context_window=1_048_576,
         pricing=TokenPricing(
             input=0.25,
             output=1.50,
@@ -97,6 +106,7 @@ CATALOG: dict[str, ModelSpec] = {
         # one place, so implicit cache reads land reliably.
         providers={"openrouter": "z-ai/glm-5.2", "zai": "glm-5.2"},
         default_provider="openrouter",
+        context_window=1_048_576,
         # Z.ai OFFICIAL pricing is canonical here (decision 2026-08-04): 1.40/4.40,
         # cached input 0.26, cache storage currently free (no write premium).
         # OpenRouter's marketplace price floats by host (0.76/2.42 observed) — we
@@ -118,6 +128,7 @@ CATALOG: dict[str, ModelSpec] = {
         # (0.73/3.50 observed) — priced by the first party, same principle as glm.
         providers={"openrouter": "moonshotai/kimi-k2.7-code"},
         default_provider="openrouter",
+        context_window=262_144,
         pricing=TokenPricing(
             input=0.95,
             output=4.00,
@@ -133,6 +144,7 @@ CATALOG: dict[str, ModelSpec] = {
             "openrouter": "anthropic/claude-haiku-4.5",
         },
         default_provider="anthropic",
+        context_window=200_000,
         pricing=TokenPricing(
             input=1.00,
             output=5.00,
@@ -147,12 +159,13 @@ CATALOG: dict[str, ModelSpec] = {
         # by luna below and sol/opus above in the router-level ablation.
         providers={"openai": "gpt-5.6-terra", "openrouter": "openai/gpt-5.6-terra"},
         default_provider="openai",
+        context_window=1_050_000,
         pricing=TokenPricing(
-            input=2.00,
-            output=12.00,
-            cache_read=0.20,
-            cache_write_5m=2.00,
-            cache_write_1h=2.00,
+            input=2.0,
+            output=12.0,
+            cache_read=0.2,
+            cache_write_5m=2.5,
+            cache_write_1h=2.5,
         ),
     ),
     "claude-sonnet-5": ModelSpec(
@@ -165,12 +178,15 @@ CATALOG: dict[str, ModelSpec] = {
             "openrouter": "anthropic/claude-sonnet-5",
         },
         default_provider="anthropic",
+        context_window=1_000_000,
         pricing=TokenPricing(
-            input=3.00,
-            output=15.00,
-            cache_read=0.30,
-            cache_write_5m=3.75,
-            cache_write_1h=6.00,
+            # Anthropic price cut (user-reported 2026-08-15): 3.00/15.00 -> 2.00/10.00;
+            # cache rates follow the standard multipliers (read 0.1x, write 1.25x/2x).
+            input=2.00,
+            output=10.00,
+            cache_read=0.20,
+            cache_write_5m=2.50,
+            cache_write_1h=4.00,
         ),
     ),
     "kimi-k3": ModelSpec(
@@ -182,6 +198,7 @@ CATALOG: dict[str, ModelSpec] = {
         # at scale.
         providers={"openrouter": "moonshotai/kimi-k3"},
         default_provider="openrouter",
+        context_window=1_048_576,
         # 3.00/15.00, cache read 0.30 — live-verified 2026-08-04 (exactly
         # sonnet-tier pricing, including the cache-read rate).
         pricing=TokenPricing(
@@ -199,12 +216,13 @@ CATALOG: dict[str, ModelSpec] = {
         # roster (router-level contribution <=0); enable for reasoning-heavy configs.
         providers={"openai": "gpt-5.6-sol", "openrouter": "openai/gpt-5.6-sol"},
         default_provider="openai",
+        context_window=1_050_000,
         pricing=TokenPricing(
-            input=5.00,
-            output=30.00,
-            cache_read=0.50,
-            cache_write_5m=5.00,
-            cache_write_1h=5.00,
+            input=4.0,
+            output=20.0,
+            cache_read=0.4,
+            cache_write_5m=5.0,
+            cache_write_1h=5.0,
         ),
     ),
     "claude-opus-5": ModelSpec(
@@ -216,6 +234,7 @@ CATALOG: dict[str, ModelSpec] = {
             "openrouter": "anthropic/claude-opus-5",
         },
         default_provider="anthropic",
+        context_window=1_000_000,
         pricing=TokenPricing(
             input=5.00,
             output=25.00,

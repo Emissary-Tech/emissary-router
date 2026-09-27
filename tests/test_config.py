@@ -78,8 +78,8 @@ def test_catalog_contains_supported_models() -> None:
         "kimi-k2.7-code",
         "glm-5.2",
         "claude-haiku-4.5",
-        "gpt-5.6-terra",
         "claude-sonnet-5",
+        "gpt-5.6-terra",
         "kimi-k3",
         "claude-opus-5",
         "gpt-5.6-sol",
@@ -114,12 +114,13 @@ def test_routing_order_is_by_price_not_dict_order(monkeypatch: pytest.MonkeyPatc
         "kimi-k2.7-code",
         "glm-5.2",
         "claude-haiku-4.5",
-        "gpt-5.6-terra",
-        # 18.0 blended tie (sonnet-5 / kimi-k3) -> deterministic name tie-break
+        # sonnet-5 moved below terra after the 2026-08 price cut (12.0 vs 14.0)
         "claude-sonnet-5",
+        "gpt-5.6-terra",
         "kimi-k3",
-        "claude-opus-5",
+        # sol moved below opus after the 2026-08 GPT price sheet (4/20 vs 5/25)
         "gpt-5.6-sol",
+        "claude-opus-5",
     ]
 
 

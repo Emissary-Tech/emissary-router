@@ -52,6 +52,31 @@ class CacheLedger:
         """Rolling estimate of recent output length, used to weight output cost."""
         return max(1, round(self._output_ema))
 
+    def observed_context_tokens(self, features: RequestCostFeatures) -> int:
+        """Cache size the provider reported on this session's latest turn, any model.
+
+        Providers count with their own tokenizer and the chars/4 estimate can undercount
+        (CJK-heavy text runs ~2x), while the last turn's observed cache covers about the
+        whole conversation. That makes it a real-number floor for the context-fit guard,
+        including for models this session has never used. The FRESHEST entry is taken,
+        not the largest: after /compact the newest observation is the small one, and an
+        older, larger entry for another model would otherwise keep excluding models
+        until its TTL ran out.
+        """
+        if not features.session_id:
+            return 0
+        now = time.time()
+        freshest: CacheLedgerEntry | None = None
+        for key, entry in self._entries.items():
+            if (
+                key.session_id == features.session_id
+                and key.prefix_hash == features.prefix_hash
+                and entry.expires_at > now
+                and (freshest is None or entry.expires_at > freshest.expires_at)
+            ):
+                freshest = entry
+        return freshest.cached_tokens if freshest is not None else 0
+
     def predict(self, model: ResolvedModel, features: RequestCostFeatures) -> CachePrediction:
         key = self._key(model, features)
         if key is None:

@@ -31,12 +31,13 @@ def choose_model(
     background call); if the default itself is skipped, the cheapest usable model
     serves instead.
 
-    Context limits are deliberately NOT a routing concern: a request that exceeds the
-    served model's window comes back as a provider 400, which the OpenRouter path
-    normalizes to Anthropic's "prompt is too long" shape so the client's own context
-    management (Claude Code: truncate old tool results, retry; worst case /compact)
-    takes over. The conversation belongs to the client — the router does not silently
-    reroute it based on its own size estimates.
+    Context fit is decided before this function: the pipeline adds every non-default
+    model whose window can't hold the request to `skip_models` (routing/context_guard.py),
+    so a confident candidate is never chosen into a guaranteed context-overflow 400. The
+    default is never excluded. The conversation belongs to the client, so a request that
+    exceeds the default's own window still comes back as a provider 400, normalized to
+    Anthropic's "prompt is too long" shape so the client's context management (Claude
+    Code: truncate old tool results, retry; worst case /compact) takes over.
     """
     if cost_features is not None and cache_ledger is not None:
         return _cache_aware(config, probabilities, skip_models, cost_features, cache_ledger)
@@ -115,6 +116,24 @@ def _cache_aware(
 
     # `is_cheaper` is strict, so when best IS the default this is always a stay.
     if default_estimate is not None and not is_cheaper(best, default_estimate):
+        # Charm-style escalation (always on): every confident candidate priced above
+        # the default only stays on the default when the default's own head clears
+        # the gate. If the default is unconfident about this request, send it to
+        # the cheapest confident candidate even though it costs more — "I say I
+        # can't; they say they can." Inert when nothing is priced above the default.
+        if (
+            len(candidates) > 1
+            and probabilities.get(config.default, 0.0) < config.confidence
+        ):
+            non_default = [e for n, e in estimates.items() if n != config.default]
+            up = min(non_default, key=lambda estimate: estimate.total_usd)
+            return RouteDecision(
+                model_name=up.model_name,
+                reason="cache_aware:escalate_default_unconfident",
+                probabilities=probabilities,
+                estimated_costs=estimated_costs,
+                cache_prediction=up.cache_prediction.to_dict(),
+            )
         # Stayed on default. Distinguish *why* so the cause is visible in telemetry:
         #   no_confident_candidate — no non-default model cleared `confidence`
         #   warm_default_cheaper   — the default's warm cache beat a confident candidate

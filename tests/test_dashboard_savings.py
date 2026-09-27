@@ -19,9 +19,9 @@ def test_savings_vs_baseline():
     summary = compute_summary(aggregates, "claude-sonnet-5")
     assert summary["baseline_available"] is True
     assert summary["total_cost_usd"] == 6.0
-    assert summary["baseline_cost_usd"] == 18.0  # 1*3 + 1*15
-    assert summary["savings_usd"] == 12.0
-    assert summary["savings_pct"] == round(12 / 18 * 100, 1)
+    assert summary["baseline_cost_usd"] == 12.0  # 1*2 + 1*10 (2026-08 price cut)
+    assert summary["savings_usd"] == 6.0
+    assert summary["savings_pct"] == round(6 / 12 * 100, 1)
 
 
 def test_baseline_unavailable_when_no_price():

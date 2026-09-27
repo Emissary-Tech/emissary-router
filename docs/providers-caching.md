@@ -5,14 +5,24 @@ by the catalog, not your config.
 
 | Model | Provider | Upstream model id | Context window |
 |---|---|---|---|
-| `claude-sonnet-5` | Anthropic | `claude-sonnet-5` | 200K (1M with the `context-1m` beta) |
-| `claude-haiku-4.5` | Anthropic | `claude-haiku-4-5` | 200K |
+| `claude-opus-5` | Anthropic (default) or OpenRouter | `claude-opus-5` / `anthropic/claude-opus-5` | 1M |
+| `claude-sonnet-5` | Anthropic (default) or OpenRouter | `claude-sonnet-5` / `anthropic/claude-sonnet-5` | 1M |
+| `claude-haiku-4.5` | Anthropic (default) or OpenRouter | `claude-haiku-4-5` / `anthropic/claude-haiku-4.5` | 200K |
+| `gpt-5.6-sol` | OpenAI (default) or OpenRouter | `gpt-5.6-sol` / `openai/gpt-5.6-sol` | 1.05M |
+| `gpt-5.6-terra` | OpenAI (default) or OpenRouter | `gpt-5.6-terra` / `openai/gpt-5.6-terra` | 1.05M |
+| `gpt-5.6-luna` | OpenAI (default) or OpenRouter | `gpt-5.6-luna` / `openai/gpt-5.6-luna` | 1.05M |
 | `gemini-3.1-flash-lite` | OpenRouter (default) or Google native | `google/gemini-3.1-flash-lite` / `gemini-3.1-flash-lite` | 1M |
 | `glm-5.2` | OpenRouter (default) or Z.ai native | `z-ai/glm-5.2` / `glm-5.2` | 1M |
+| `deepseek-v4-flash` | OpenRouter | `deepseek/deepseek-v4-flash` | 1M |
+| `kimi-k3` | OpenRouter | `moonshotai/kimi-k3` | 1M |
 | `kimi-k2.7-code` | OpenRouter | `moonshotai/kimi-k2.7-code` | 256K |
 
+The context windows are the catalog's `context_window` values, which the context-fit
+guard below reads.
+
 Provider API keys come from the environment (`ANTHROPIC_API_KEY`,
-`OPENROUTER_API_KEY`, `ZAI_API_KEY` when GLM is configured with
+`OPENROUTER_API_KEY`, `OPENAI_API_KEY` for the gpt-5.6 models on their default
+provider, `ZAI_API_KEY` when GLM is configured with
 `"provider": "zai"`), loaded from `~/.emissary-router/.env` if present. Only the
 providers used by enabled models need keys.
 
@@ -64,18 +74,30 @@ native Anthropic requests were always a raw streaming passthrough.
 
 Claude Code decides when to auto-compact from the window of the model it *believes*
 it is talking to (the one in `/model`), using the usage numbers the router passes
-through. With the default 200K budget this is safe with the catalog above: every
-routable model has a 200K+ window, so Claude Code compacts before any of them can
-overflow.
+through. With a 1M default (`claude-opus-5`, `claude-sonnet-5`) a conversation can grow
+far past what `claude-haiku-4.5` (200K) or `kimi-k2.7-code` (256K) can hold.
 
-⚠️ The case to know about is **1M mode** (`context-1m` beta on Sonnet). Claude Code
-then lets the conversation grow far past 200K — beyond what `claude-haiku-4.5` (200K)
-or `kimi-k2.7-code` (256K) can hold. The router deliberately does **not** reroute
-around this: the conversation belongs to the client, and shrinking it is the
-client's decision, not something the router should do silently from its own size
-estimates. A request routed to a model that can't hold it comes back as that
-provider's 400 (visible as a 400 row in the dashboard), normalized so the client's
-own context management takes over.
+The **context-fit guard** keeps such a request from ever being deviated to a model
+that can't hold it. Before the cost comparison, every non-default model whose window is
+smaller than the request is dropped from the candidate set:
+
+- The request size is the router's estimate of the whole input, floored by the cache
+  size the provider reported on the session's latest turn (real tokenizer numbers,
+  which catch the estimate undercounting CJK-heavy history).
+- Output is reserved the way each provider validates it. OpenRouter checks input plus
+  the request's `max_tokens` against the window, so the whole `max_tokens` is reserved
+  there; other providers reserve the expected output size.
+- The fit keeps a 5% margin, and a model with an unknown window is never dropped.
+- It is stateless per request: after the client compacts, the dropped models are back
+  in play on the next request.
+- Exclusions are logged at INFO and recorded on the call's telemetry row
+  (`raw_event.context_excluded`).
+
+The default is never dropped. The conversation belongs to the client, and shrinking it
+is the client's decision, not something the router should do from its own size
+estimates. A request that exceeds the default's own window comes back as that
+provider's 400 (visible as a 400 row in the dashboard), normalized so the client's own
+context management takes over.
 
 What that looks like for the user (verified against a real Claude Code 2.1.198
 session with an injected overflow 400):
@@ -97,9 +119,8 @@ context-overflow 400s into the Anthropic shape before returning them, so the
 recovery works the same no matter which provider or model served the request; the
 original OpenRouter error is still logged.
 
-If you run 1M mode routinely, expect occasional overflow 400 rows for the sub-1M
-models (`claude-haiku-4.5` / `kimi-k2.7-code`) as Claude Code trims and retries — or
-disable those models for such sessions.
+Only an overflow of the default itself takes this path now; deviations to a smaller
+window are filtered out before they can overflow.
 
 ## Caching
 
