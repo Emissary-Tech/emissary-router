@@ -185,9 +185,11 @@ Routing is confidence-gated and cache-aware by default:
    priced at full input plus a cache write. The cheapest wins; the default stays unless
    a candidate is strictly cheaper _after_ cache effects.
 
-Context limits are deliberately not a routing input: a request that exceeds the
-served model's window surfaces as a normalized `prompt is too long` 400 and the
-client's own context management (compaction) takes over — see
+Candidates must also fit the request: a confident model whose context window can't
+hold it is dropped before the comparison (the context-fit guard). The default is never
+dropped, so a request that exceeds the default's own window still surfaces as a
+normalized `prompt is too long` 400 and the client's own context management
+(compaction) takes over — see
 [providers and caching](providers-caching.md#context-windows-and-long-conversations).
 
 Cache awareness is not a mode. Wherever there is no cache signal — cold start, or a

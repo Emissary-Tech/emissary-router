@@ -30,7 +30,7 @@ class _PartialClassifier:
 class _ConfidentHaikuClassifier:
     async def predict(self, _input):
         return {
-            "claude-sonnet-5": 0.1,
+            "claude-sonnet-5": 0.9,
             "claude-haiku-4.5": 0.95,
             "gemini-3.1-flash-lite": 0.1,
         }
