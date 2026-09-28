@@ -169,6 +169,15 @@ if os.environ.get("EMISSARY_ROUTER_BENCH_EXTRAS"):
         accepts_adaptive_thinking=True,
         max_effort="xhigh",
     )
+    # qwen3.8-omni-flash (candidate): reasoning default ON. Alibaba accepts every effort
+    # rung (minimal..xhigh, max) but ignores the level — ~500-1000 reasoning tokens at
+    # each one on the same prompt; only "none" changes anything (reasoning off).
+    # Probed 2026-09-28 via OpenRouter.
+    THINKING_CAPABILITIES["qwen3.8-omni-flash"] = ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=False,
+        max_effort="xhigh",
+    )
     THINKING_CAPABILITIES["openrouter-auto"] = ModelThinkingCapabilities(
         accepts_effort_param=False,
         accepts_adaptive_thinking=False,

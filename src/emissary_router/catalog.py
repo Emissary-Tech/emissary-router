@@ -66,7 +66,6 @@ CATALOG: dict[str, ModelSpec] = {
             cache_write_1h=0.22,
         ),
     ),
-    # 2026-09-15: Charm roster (charm-dsv41 classifier); OpenRouter listing == these rates.
     "deepseek-v4.1-flash": ModelSpec(
         name="deepseek-v4.1-flash",
         providers={"openrouter": "deepseek/deepseek-v4.1-flash"},
@@ -330,6 +329,19 @@ if os.environ.get("EMISSARY_ROUTER_BENCH_EXTRAS"):
             cache_read=0.26,
             cache_write_5m=1.40,
             cache_write_1h=1.40,
+        ),
+    )
+    # no cache-write premium listed (write == input). Reasoning is on by default.
+    CATALOG["qwen3.8-omni-flash"] = ModelSpec(
+        name="qwen3.8-omni-flash",
+        providers={"openrouter": "qwen/qwen3.8-omni-flash"},
+        default_provider="openrouter",
+        pricing=TokenPricing(
+            input=0.15,
+            output=0.47,
+            cache_read=0.016,
+            cache_write_5m=0.15,
+            cache_write_1h=0.15,
         ),
     )
     CATALOG["openrouter-auto"] = ModelSpec(
