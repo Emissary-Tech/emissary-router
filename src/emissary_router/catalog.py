@@ -344,6 +344,21 @@ if os.environ.get("EMISSARY_ROUTER_BENCH_EXTRAS"):
             cache_write_1h=0.15,
         ),
     )
+    # qwen3.8-flash (2026-09-29): the easy-task candidate under its production label name;
+    # router heads are trained on qwen3.8-omni-flash data (same price, same Alibaba host).
+    # OpenRouter listing: $0.15 in / $0.47 out, cache read $0.016, cache write $0.20.
+    CATALOG["qwen3.8-flash"] = ModelSpec(
+        name="qwen3.8-flash",
+        providers={"openrouter": "qwen/qwen3.8-flash"},
+        default_provider="openrouter",
+        pricing=TokenPricing(
+            input=0.15,
+            output=0.47,
+            cache_read=0.016,
+            cache_write_5m=0.20,
+            cache_write_1h=0.20,
+        ),
+    )
     CATALOG["openrouter-auto"] = ModelSpec(
         name="openrouter-auto",
         providers={"openrouter": "openrouter/auto"},

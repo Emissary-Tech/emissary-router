@@ -178,6 +178,13 @@ if os.environ.get("EMISSARY_ROUTER_BENCH_EXTRAS"):
         accepts_adaptive_thinking=False,
         max_effort="xhigh",
     )
+    # qwen3.8-flash: same contract as omni-flash — every effort rung accepted and ignored
+    # (~500-1100 reasoning tokens at each), "none" turns reasoning off. Probed 2026-09-29.
+    THINKING_CAPABILITIES["qwen3.8-flash"] = ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=False,
+        max_effort="xhigh",
+    )
     THINKING_CAPABILITIES["openrouter-auto"] = ModelThinkingCapabilities(
         accepts_effort_param=False,
         accepts_adaptive_thinking=False,
