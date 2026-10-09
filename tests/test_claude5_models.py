@@ -14,9 +14,12 @@ def test_claude5_thinking_capabilities_match_sonnet46_surface() -> None:
         assert cap.max_effort == "max"
 
 
-def test_kimi_k3_is_always_on_reasoning_like_k27() -> None:
+def test_kimi_k3_can_disable_thinking_unlike_k27() -> None:
+    # live 2026-10-08 (OpenRouter): kimi-k3 returns 200 with 0 reasoning tokens on
+    # effort none / enabled:false; kimi-k2.7-code still 400s ("Reasoning is mandatory")
     cap = THINKING_CAPABILITIES["kimi-k3"]
-    assert not cap.can_disable_thinking
+    assert cap.can_disable_thinking
+    assert not THINKING_CAPABILITIES["kimi-k2.7-code"].can_disable_thinking
     assert cap.accepts_effort_param
     assert not cap.accepts_adaptive_thinking
 

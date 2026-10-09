@@ -16,15 +16,13 @@ from emissary_router.config import AppConfig, ProviderConfig
 from emissary_router.schemas import AnthropicRequest, RequestContext, RouteDecision
 from emissary_router.providers.registry import build_provider
 from emissary_router.routing.classifier import ClassifierClient
-from emissary_router.routing.labels import (
-    collapse_effort_labels,
-    expected_output_by_model,
-    select_forced_effort,
-    split_len_labels,
+from emissary_router.routing.labels import HeadPick, collapse_effort_heads, has_effort_heads
+from emissary_router.providers.thinking import (
+    always_on_reasoning_models,
+    extract_reasoning_settings,
+    force_effort,
 )
-from emissary_router.providers.thinking import always_on_reasoning_models, force_effort
 from emissary_router.routing.cache_cost import extract_request_cost_features
-from emissary_router.routing.calibration import to_probabilities
 from emissary_router.routing.policy import choose_model
 from emissary_router.routing.request_to_classifier_input import request_to_classifier_input
 from emissary_router.telemetry import (
@@ -87,11 +85,10 @@ class RouterPipeline:
         # offline analysis (tau sweeps, calibration) can replay decisions; stays
         # None on the single-model and classifier-fallback paths.
         probs: dict[str, float] | None = None
-        label_winner: dict[str, str] = {}
-        base_probs: dict[str, float] = {}
+        picks: dict[str, HeadPick] = {}
         # A single-model config forces the decision — skip classification entirely.
         # This is also what lets a config serve models the classifier has no head
-        # for (e.g. the benchmark-only openrouter-auto passthrough entry).
+        # for (e.g. the benchmark-only openrouter-auto / cloudflare-auto passthroughs).
         enabled = self._config.enabled_models()
         if len(enabled) == 1 and self._config.default == enabled[0]:
             decision = self._default_decision(reason="single_model")
@@ -100,33 +97,25 @@ class RouterPipeline:
             # in ClassifierClient) or returns an unparseable response, fall back to
             # the configured default model rather than failing the request.
             try:
-                raw_values = await self._classifier.predict(classifier_input)
+                raw_probs = await self._classifier.predict(classifier_input)
             except (httpx.HTTPError, KeyError, IndexError, ValueError, TypeError) as exc:
                 logger.warning("classifier failed; routing to default model: %s", exc)
                 decision = self._default_decision(reason="fallback: router_issue")
             else:
-                # The classifier returns logits (or probs); the gateway reasons with ONE
-                # probability set = sigmoid(z + confidence_bias) for pass heads (length
-                # heads unshifted). Telemetry keeps the unshifted probabilities + the bias.
-                fmt = self._config.router.data_format
-                labeled_probs = to_probabilities(raw_values, fmt)
-                probabilities = to_probabilities(raw_values, fmt, self._config.confidence_bias)
-                # effort-suffixed heads (model@low ...) collapse to base models for
-                # routing; the winning variant decides the forced effort below
-                # length heads (<label>:len) are per-model output-size predictions, not
-                # pass probabilities: split them off before the gate/collapse see them
-                probabilities, len_by_label = split_len_labels(probabilities)
-                probabilities, label_winner = collapse_effort_labels(probabilities)
-                probs = labeled_probs
-                base_probs = probabilities
-                expected_output = (
-                    expected_output_by_model(
-                        len_by_label, label_winner, self._config.len_correction,
-                        self._config.len_cap_tokens, self._config.len_floor_tokens,
-                    )
-                    if self._config.cost_aware
-                    else {}
+                # Per-effort heads (<model>@low ...) fold into one probability per
+                # base model before the label gate and the policy see them — the head
+                # for the effort the model would actually be served at
+                # (routing/labels.py). A plain-label checkpoint passes through unchanged.
+                probabilities, picks = collapse_effort_heads(
+                    raw_probs,
+                    routed={
+                        name for name in enabled
+                        if self._config.models[name].effort_routing
+                    },
+                    confidence=self._config.confidence,
+                    reasoning=extract_reasoning_settings(body),
                 )
+                probs = raw_probs
                 missing_labels = self._missing_probability_labels(probabilities)
                 if missing_labels:
                     self._record_failure(
@@ -153,21 +142,15 @@ class RouterPipeline:
                     skip_models=skip,
                     cost_features=cost_features,
                     cache_ledger=self._cache_ledger,
-                    expected_output_by_model=expected_output,
                 )
         model = self._config.resolve_model(decision.model_name)
         provider = self._providers[model.provider]
-        # The winning variant's effort is forced only when the served model's own
-        # head cleared the gate — i.e. the classifier actually selected that
-        # (model, effort). A default served as the fallback (nothing confident,
-        # default gate-exempt) keeps the client's effort: the classifier had no
-        # confident opinion to impose, and the fallback is meant to be the safe path.
-        chosen_label = label_winner.get(decision.model_name)
-        forced_effort = select_forced_effort(
-            label_winner, base_probs, decision.model_name, self._config.confidence
-        )
-        if forced_effort:
-            force_effort(body, forced_effort)
+        # Served off a per-effort head with effort routing on: force the rung the
+        # classifier vouched for (None when no rung cleared the gate — the request
+        # then goes out untouched, at the client's effort or the provider default).
+        pick = picks.get(decision.model_name)
+        forced_effort = pick.forced_effort if pick is not None else None
+        effort_changes = force_effort(body, forced_effort) if forced_effort else []
 
         context = RequestContext(
             request_id=request_id,
@@ -201,9 +184,7 @@ class RouterPipeline:
                 http_status=_int_or_none(provider_metadata.get("http_status")),
                 raw_event=_routed_raw_event(
                     provider_metadata, model.model_id, probs, self._config.confidence,
-                    label=chosen_label if forced_effort else None, forced_effort=forced_effort,
-                    kappa=self._config.kappa_usd if self._config.cost_aware else None,
-                    bias=self._config.confidence_bias,
+                    pick=pick, effort_changes=effort_changes,
                 ),
                 **usage_tokens(usage),
             )
@@ -286,18 +267,18 @@ def _routed_raw_event(
     requested_model_id: str,
     probabilities: dict[str, float] | None = None,
     tau: float | None = None,
-    label: str | None = None,
-    forced_effort: str | None = None,
-    kappa: float | None = None,
-    bias: float = 0.0,
+    pick: HeadPick | None = None,
+    effort_changes: list[str] | None = None,
 ) -> str | None:
-    """For dynamic-router calls (openrouter/auto), keep the actually-routed model
-    and the provider's own credit cost — the response is the only place they exist,
-    and the bench pick-distribution/cost tables are built from these rows. When the
-    classifier ran, also keep its per-head probabilities and the serving tau so
-    decisions can be replayed offline (tau sweeps, calibration) without re-running.
+    """For dynamic-router calls (openrouter/auto, cloudflare/auto), keep the
+    actually-routed model and the provider's own credit cost — the response is the
+    only place they exist, and the bench pick-distribution/cost tables are built from
+    these rows. When the classifier ran, also keep its per-head probabilities (the
+    raw heads, effort arms included) and the serving tau so decisions can be replayed
+    offline (tau sweeps, calibration) without re-running. When the served model was
+    read off a per-effort head, record which head and what was forced.
     Additive keys only — consumers .get() specific fields."""
-    routed = provider_metadata.get("openrouter_model")
+    routed = provider_metadata.get("routed_model") or provider_metadata.get("openrouter_model")
     or_cost = provider_metadata.get("or_cost")
     payload: dict = {}
     if (routed and routed != requested_model_id) or or_cost is not None:
@@ -306,17 +287,18 @@ def _routed_raw_event(
             "or_cost": or_cost,
             "gen_id": provider_metadata.get("id"),
         })
+    if provider_metadata.get("routing_reason"):
+        payload["routing_reason"] = provider_metadata["routing_reason"]
     if probabilities:
         payload["probs"] = {k: round(v, 4) for k, v in probabilities.items()}
         if tau is not None:
             payload["tau"] = tau
-        if kappa:
-            payload["kappa_usd"] = kappa
-        if bias:
-            payload["confidence_bias"] = bias
-    if forced_effort:
-        payload["label"] = label
-        payload["forced_effort"] = forced_effort
+    if pick is not None and (pick.forced_effort or has_effort_heads({pick.label: 0.0})):
+        payload["effort_head"] = pick.label
+        payload["effort_head_reason"] = pick.reason
+        if pick.forced_effort:
+            payload["forced_effort"] = pick.forced_effort
+            payload["effort_changes"] = effort_changes or []
     return json.dumps(payload) if payload else None
 
 

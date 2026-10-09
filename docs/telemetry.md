@@ -35,6 +35,14 @@ request/response bodies and prompt text are never stored, only the metadata belo
 - `cost_usd` — estimated cost from the catalog price of the served model
 - `http_status` — upstream HTTP status (set on failures so errors stay visible)
 
+`raw_event` (when `telemetry.include_raw_event` is on) keeps what the dashboard
+columns cannot: the classifier's per-head probabilities (`probs`, effort arms
+included) and the serving `tau`; for dynamic competitor routers the model they
+actually served (`routed_model`, `routing_reason`) and OpenRouter's billed `or_cost`;
+and for effort routing the head read for the served model (`effort_head`,
+`effort_head_reason`), the effort forced (`forced_effort`) and the request fields
+rewritten (`effort_changes`).
+
 `input_tokens` is the **uncached** input only. On a cache hit it is tiny (often 1)
 while `cache_read_tokens` holds the bulk of the prompt — so the dashboard's "Prompt"
 column sums `input + cache_read + cache_creation` to match the provider's reported

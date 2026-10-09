@@ -71,27 +71,37 @@ def test_glm_and_kimi_are_selectable_in_config() -> None:
 def test_catalog_contains_supported_models() -> None:
     # Catalog insertion order is cosmetic: routing derives order from cost_score
     # (see test_routing_order_is_by_price_not_dict_order), so assert membership, not order.
+    # The set mirrors the platform gateway catalog (emissary-ai catalog.py, 2026-10-08).
     assert set(CATALOG) == {
         "deepseek-v4-flash",
-        "deepseek-v4-flash-0731",  # snapshot-named alias (same pricing), promoted 2026-09-04
-        "deepseek-v4.1-flash",  # Charm roster, 2026-09-15
+        "deepseek-v4-flash-0731",  # snapshot-named alias (same pricing)
+        "deepseek-v4.1-flash",
+        "gpt-6-luna",
+        "qwen3.8-omni-flash",
+        "qwen3.8-flash",
         "gpt-5.6-luna",
         "gemini-3.1-flash-lite",
         "kimi-k2.7-code",
-        "glm-5.2",
         "claude-haiku-4.5",
-        "claude-sonnet-5",
+        "glm-5.2",
+        "glm-5.3",
+        "glm-5.3-flash",
         "gpt-5.6-terra",
+        "claude-sonnet-5",
+        "claude-sonnet-5.5",
+        "gpt-6-sol",
+        "gpt-6.1-sol",
         "kimi-k3",
-        "claude-opus-5",
         "gpt-5.6-sol",
+        "claude-opus-5.5",
+        "claude-opus-5",
     }
 
 
 def test_cost_score_orders_catalog_cheap_to_expensive() -> None:
     from emissary_router.catalog import cost_score
 
-    # At Z.ai official pricing glm blends to 5.80 — above kimi-2.7 (4.24), below haiku.
+    # platform prices: glm-5.2 blends to 5.80 — above kimi-2.7 (4.95), below haiku (6.0).
     assert (
         cost_score(CATALOG["gemini-3.1-flash-lite"])
         < cost_score(CATALOG["kimi-k2.7-code"])
@@ -110,21 +120,29 @@ def test_routing_order_is_by_price_not_dict_order(monkeypatch: pytest.MonkeyPatc
 
     config = _config(models={name: True for name in reordered})
     assert config.enabled_models() == [
-        "deepseek-v4.1-flash",  # cheapest: 0.15 in / 0.60 out
-        "deepseek-v4-flash",
-        "deepseek-v4-flash-0731",  # same cost_score; (cost_score, name) tie-break
-        "gpt-5.6-luna",
-        "gemini-3.1-flash-lite",
-        "kimi-k2.7-code",
-        "glm-5.2",
-        "claude-haiku-4.5",
-        # sonnet-5 moved below terra after the 2026-08 price cut (12.0 vs 14.0)
-        "claude-sonnet-5",
-        "gpt-5.6-terra",
-        "kimi-k3",
-        # sol moved below opus after the 2026-08 GPT price sheet (4/20 vs 5/25)
-        "gpt-5.6-sol",
-        "claude-opus-5",
+        # (cost_score, name) order at platform prices, 2026-10-08
+        "deepseek-v4-flash",        # 0.42
+        "deepseek-v4-flash-0731",   # 0.42 (name tie-break)
+        "gpt-6-luna",               # 0.60
+        "qwen3.8-flash",            # 0.62
+        "qwen3.8-omni-flash",       # 0.62 (name tie-break)
+        "glm-5.3-flash",            # 0.65
+        "deepseek-v4.1-flash",      # 0.75
+        "gpt-5.6-luna",             # 1.40
+        "gemini-3.1-flash-lite",    # 1.75
+        "kimi-k2.7-code",           # 4.95
+        "glm-5.2",                  # 5.80
+        "glm-5.3",                  # 5.80
+        "claude-haiku-4.5",         # 6.00
+        "claude-sonnet-5",          # 12.0
+        "claude-sonnet-5.5",        # 12.0
+        "gpt-6-sol",                # 12.0
+        "gpt-6.1-sol",              # 12.0
+        "gpt-5.6-terra",            # 14.0
+        "kimi-k3",                  # 18.0
+        "claude-opus-5.5",          # 24.0
+        "gpt-5.6-sol",              # 24.0
+        "claude-opus-5",            # 30.0
     ]
 
 

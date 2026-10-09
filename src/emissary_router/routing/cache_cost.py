@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 import hashlib
 import json
-import math
 from typing import Any
 
 from emissary_router.catalog import CATALOG, TokenPricing
@@ -12,30 +11,6 @@ from emissary_router.config import AppConfig
 
 
 DEFAULT_EXPECTED_OUTPUT_TOKENS = 1024
-
-# Length heads ("<model>:len") are trained on
-#     y = (log tokens - log FLOOR) / (log CAP - log FLOOR), clipped to [0, 1]
-# with cap-exhausted runs at 1.0 (routerbench builder, ROUTER_LEN_HEADS=1). The
-# serving inverse below must use the same two constants the classifier was trained
-# with: these module values are the 32K-contract defaults, and AppConfig
-# (len_floor_tokens / len_cap_tokens) overrides them per deployment — e.g. 131072 for
-# a classifier trained on the uncapped label family.
-LEN_FLOOR_TOKENS = 100
-LEN_CAP_TOKENS = 32000
-
-
-def len_to_tokens(
-    y: float,
-    correction: float = 1.0,
-    cap: float = LEN_CAP_TOKENS,
-    floor: float = LEN_FLOOR_TOKENS,
-) -> int:
-    """Invert a length head's sigmoid output into expected output tokens."""
-    y = min(max(float(y), 0.0), 1.0)
-    log_span = math.log(cap) - math.log(floor)
-    tokens = math.exp(y * log_span + math.log(floor))
-    return max(1, int(round(tokens * correction)))
-
 
 @dataclass(frozen=True)
 class RequestCostFeatures:
@@ -120,20 +95,12 @@ def estimate_cost(
     model_name: str,
     features: RequestCostFeatures,
     cache_ledger,
-    expected_output_tokens: int | None = None,
 ) -> EstimatedCost:
-    """Cache-adjusted cost of THIS request on `model_name`. `expected_output_tokens`
-    (from the model's length head) overrides the request-level rolling estimate in
-    `features`, which is the same for every model and cannot tell a terse model from
-    a verbose one."""
+    """Cache-adjusted cost of THIS request on `model_name`."""
     model = config.resolve_model(model_name)
     prediction = cache_ledger.predict(model, features)
     price = CATALOG[model_name].pricing
-    output_tokens = (
-        features.expected_output_tokens
-        if expected_output_tokens is None
-        else max(1, int(expected_output_tokens))
-    )
+    output_tokens = features.expected_output_tokens
 
     if prediction.warm:
         # Credit the cache the provider actually reported (system + tools + most of the

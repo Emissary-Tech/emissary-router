@@ -42,6 +42,9 @@ class ModelThinkingCapabilities:
 
 
 THINKING_CAPABILITIES = {
+    # Mirrors the platform gateway's table (emissary-ai providers/thinking.py,
+    # 2026-10-08) for every catalog model; the bench-only competitor routers are
+    # appended under EMISSARY_ROUTER_BENCH_EXTRAS below.
     "claude-haiku-4.5": ModelThinkingCapabilities(
         accepts_effort_param=False,
         accepts_adaptive_thinking=False,
@@ -60,6 +63,21 @@ THINKING_CAPABILITIES = {
         accepts_adaptive_thinking=True,
         max_effort="xhigh",
     ),
+    # glm-5.3 / glm-5.3-flash cannot switch reasoning off on OpenRouter (live
+    # 2026-10-08: 400 "Reasoning is mandatory for this endpoint and cannot be
+    # disabled" on both effort:none and enabled:false; glm-5.2 still accepts both).
+    "glm-5.3": ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=True,
+        max_effort="xhigh",
+        can_disable_thinking=False,
+    ),
+    "glm-5.3-flash": ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=True,
+        max_effort="xhigh",
+        can_disable_thinking=False,
+    ),
     # OpenRouter: Kimi K2.7 Code reasons via the effort param (OpenRouter maps the level
     # to a reasoning budget; xhigh ~= 95% of max_tokens). It always reasons — thinking
     # can't be disabled — so on a disable request the reasoning field is OMITTED
@@ -72,10 +90,10 @@ THINKING_CAPABILITIES = {
         can_disable_thinking=False,
     ),
     # claude-5 series: adaptive thinking IS the provider default (omitting `thinking`
-    # runs adaptive) and effort is a separate knob defaulting to high. Same
-    # claude-5: full ladder low/medium/high (default) /xhigh/max. NOTE: with thinking
-    # DISABLED, effort is capped at high (xhigh/max + disabled -> 400) — the anthropic
-    # normalizer enforces that cap.
+    # runs adaptive) and effort is a separate knob defaulting to high. Full ladder
+    # low/medium/high (default) /xhigh/max. NOTE: with thinking DISABLED, effort is
+    # capped at high (xhigh/max + disabled -> 400) — the anthropic normalizer
+    # enforces that cap.
     "claude-sonnet-5": ModelThinkingCapabilities(
         accepts_effort_param=True,
         accepts_adaptive_thinking=True,
@@ -88,28 +106,46 @@ THINKING_CAPABILITIES = {
         max_effort="max",
         supported_efforts=("low", "medium", "high", "xhigh", "max"),
     ),
+    # opus-5.5 / sonnet-5.5: same ladder as opus-5; thinking has no plain off switch
+    # (opus-5.5 400s on `disabled`, sonnet-5.5 wants `between_tools`) — the anthropic
+    # path serves an off request at the lowest effort instead (platform live, 2026-09).
+    "claude-opus-5.5": ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=True,
+        max_effort="max",
+        supported_efforts=("low", "medium", "high", "xhigh", "max"),
+        can_disable_thinking=False,
+    ),
+    "claude-sonnet-5.5": ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=True,
+        max_effort="max",
+        supported_efforts=("low", "medium", "high", "xhigh", "max"),
+        can_disable_thinking=False,
+    ),
     # DeepSeek V4 Flash (OpenRouter): hybrid thinking — reasons via OpenRouter's
-    # effort->budget translation and accepts a disable (non-thinking mode). Verify
-    # live before serving at scale.
+    # effort->budget translation and accepts a disable (non-thinking mode).
     "deepseek-v4-flash": ModelThinkingCapabilities(
         accepts_effort_param=True,
         accepts_adaptive_thinking=False,
         max_effort="xhigh",
     ),
-    # gpt-5.6 series (OpenAI Responses API): reasoning is the provider default;
-    # effort vocabulary none/low/medium/high/xhigh/max — "minimal" does NOT exist
-    # (snaps to low), and "none" does, so thinking can be disabled.
     # snapshot-named alias of deepseek-v4-flash (same contract)
     "deepseek-v4-flash-0731": ModelThinkingCapabilities(
         accepts_effort_param=True,
         accepts_adaptive_thinking=False,
         max_effort="xhigh",
     ),
+    # Same controls as v4-flash (live: effort moves reasoning, none turns it off;
+    # reasoning.max_tokens is ignored).
     "deepseek-v4.1-flash": ModelThinkingCapabilities(
         accepts_effort_param=True,
         accepts_adaptive_thinking=False,
         max_effort="xhigh",
     ),
+    # gpt-5.6 / gpt-6 series (OpenAI Responses API): reasoning is the provider
+    # default; effort vocabulary none/low/medium/high/xhigh/max — "minimal" does NOT
+    # exist (snaps to low), and "none" does, so thinking can be disabled.
     "gpt-5.6-sol": ModelThinkingCapabilities(
         accepts_effort_param=True,
         accepts_adaptive_thinking=False,
@@ -128,76 +164,72 @@ THINKING_CAPABILITIES = {
         max_effort="max",
         supported_efforts=("none", "low", "medium", "high", "xhigh", "max"),
     ),
-    # Assumed to behave like kimi-k2.7 (always reasons via OpenRouter's effort param;
-    # disable requests omit the reasoning field). Label runs used provider-default
-    # reasoning; verify live before serving at scale.
+    "gpt-6-sol": ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=False,
+        max_effort="max",
+        supported_efforts=("none", "low", "medium", "high", "xhigh", "max"),
+    ),
+    "gpt-6-luna": ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=False,
+        max_effort="max",
+        supported_efforts=("none", "low", "medium", "high", "xhigh", "max"),
+    ),
+    # gpt-6.1-sol drops "none" from the vocabulary (live: 400 "Supported values
+    # are: low, medium, high, xhigh, and max"), so a disable snaps to low.
+    "gpt-6.1-sol": ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=False,
+        max_effort="max",
+        supported_efforts=("low", "medium", "high", "xhigh", "max"),
+    ),
+    # Unlike kimi-k2.7, K3 CAN switch reasoning off on OpenRouter: effort none and
+    # enabled:false both return 200 with 0 reasoning tokens (live 2026-10-08).
     "kimi-k3": ModelThinkingCapabilities(
         accepts_effort_param=True,
         accepts_adaptive_thinking=False,
         max_effort="xhigh",
-        can_disable_thinking=False,
+    ),
+    # Qwen3.8 flash family (OpenRouter, Alibaba): reasons by default; effort none
+    # turns it off, other rungs are accepted but have no measurable effect;
+    # reasoning.max_tokens IS honored as a hard budget.
+    "qwen3.8-omni-flash": ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=False,
+        max_effort="xhigh",
+    ),
+    "qwen3.8-flash": ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=False,
+        max_effort="xhigh",
     ),
 }
 
-# Benchmark-only competitor entry, gated like its catalog twin (see catalog.py).
-# OpenRouter's model metadata omits the reasoning field for dynamic router models
-# (openrouter/auto) — never send effort/thinking params; the chosen model runs at
-# its own defaults (the competitor's as-shipped behavior).
+# Benchmark-only competitor routers, gated like their catalog twins (see catalog.py).
+# Dynamic routers expose no reasoning surface of their own — never send effort or
+# thinking params; the chosen model runs at its own defaults (the competitor's
+# as-shipped behavior). A Claude-style budget passed through as reasoning.max_tokens
+# would reserve the whole output window and starve the response (measured with
+# openrouter-auto, 2026-08-15).
 if os.environ.get("EMISSARY_ROUTER_BENCH_EXTRAS"):
-    # qwen3.8-27b (candidate): reasoning default ON at xhigh; effort vocabulary has
-    # NO "high" (low/medium/xhigh only — OR metadata), so effort=high snaps to xhigh.
-    THINKING_CAPABILITIES["qwen3.8-27b"] = ModelThinkingCapabilities(
-        accepts_effort_param=True,
-        accepts_adaptive_thinking=False,
-        max_effort="xhigh",
-        supported_efforts=("low", "medium", "xhigh"),
-    )
-    THINKING_CAPABILITIES["qwen3.5-9b"] = ModelThinkingCapabilities(
-        accepts_effort_param=True,
-        accepts_adaptive_thinking=False,
-        max_effort="xhigh",
-        supported_efforts=("low", "medium", "xhigh"),
-    )
-    # GLM 5.3 candidates — same reasoning contract as glm-5.2 (effort param, OpenRouter path)
-    THINKING_CAPABILITIES["glm-5.3-flash"] = ModelThinkingCapabilities(
-        accepts_effort_param=True,
-        accepts_adaptive_thinking=True,
-        max_effort="xhigh",
-    )
-    THINKING_CAPABILITIES["glm-5.3"] = ModelThinkingCapabilities(
-        accepts_effort_param=True,
-        accepts_adaptive_thinking=True,
-        max_effort="xhigh",
-    )
-    # qwen3.8-omni-flash (candidate): reasoning default ON. Alibaba accepts every effort
-    # rung (minimal..xhigh, max) but ignores the level — ~500-1000 reasoning tokens at
-    # each one on the same prompt; only "none" changes anything (reasoning off).
-    # Probed 2026-09-28 via OpenRouter.
-    THINKING_CAPABILITIES["qwen3.8-omni-flash"] = ModelThinkingCapabilities(
-        accepts_effort_param=True,
-        accepts_adaptive_thinking=False,
-        max_effort="xhigh",
-    )
-    # qwen3.8-flash: same contract as omni-flash — every effort rung accepted and ignored
-    # (~500-1100 reasoning tokens at each), "none" turns reasoning off. Probed 2026-09-29.
-    THINKING_CAPABILITIES["qwen3.8-flash"] = ModelThinkingCapabilities(
-        accepts_effort_param=True,
-        accepts_adaptive_thinking=False,
-        max_effort="xhigh",
-    )
     THINKING_CAPABILITIES["openrouter-auto"] = ModelThinkingCapabilities(
+        accepts_effort_param=False,
+        accepts_adaptive_thinking=False,
+        no_reasoning_surface=True,
+    )
+    THINKING_CAPABILITIES["cloudflare-auto"] = ModelThinkingCapabilities(
         accepts_effort_param=False,
         accepts_adaptive_thinking=False,
         no_reasoning_surface=True,
     )
 
 
-
 # claude-5 models reject client sampling params (opus-5: any temperature/top_p;
 # sonnet-5: non-default values) — measured during the 2026-07-31 label runs. Dropping
 # the keys entirely is intent-preserving: the provider default takes over, which is
 # what Claude Code's temperature=1 means anyway.
-REJECTS_SAMPLING_PARAMS = {"claude-sonnet-5", "claude-opus-5"}
+REJECTS_SAMPLING_PARAMS = {"claude-sonnet-5", "claude-opus-5", "claude-opus-5.5", "claude-sonnet-5.5"}
 
 
 def strip_unsupported_sampling_params(body: dict[str, Any], served_model: str) -> list[str]:

@@ -177,6 +177,13 @@ class ModelEntry(BaseModel):
 
     enabled: bool = True
     provider: ProviderName | None = None
+    # Let the router decide this model's reasoning effort from the classifier's
+    # per-effort heads (<model>@low ...): the model is served at the LOWEST effort
+    # that clears `confidence`, overriding a client-sent effort (never a thinking
+    # switch-off or a token budget). Off: the client's effort stands and the model
+    # is read at the head for that effort. Inert with a plain-label classifier.
+    # Same semantics as the platform gateway's `effort_routing_enabled`.
+    effort_routing: bool = False
 
 
 class RouterConfig(BaseModel):
@@ -186,11 +193,6 @@ class RouterConfig(BaseModel):
     # intentionally not shown in the shipped config. `router_model` is user-facing.
     url: str = DEFAULT_CLASSIFICATION_URL
     router_model: str = "emissary-model-router-shared"
-    # What to ask the classifier for. "logits" (default): raw head logits, turned into
-    # probabilities by the gateway itself (sigmoid(z + confidence_bias) for pass heads,
-    # sigmoid(z) for "<label>:len" heads) — exact, no inversion of rounded probabilities.
-    # "probs": the platform's sigmoid output, shifted via logit(p) + confidence_bias.
-    data_format: Literal["probs", "logits"] = "logits"
     timeout_seconds: float = 30
     max_retries: int = Field(default=5, ge=0)
     retry_backoff_seconds: float = Field(default=0.5, ge=0.0)
@@ -213,43 +215,6 @@ class AppConfig(BaseModel):
     models: dict[str, ModelEntry]
     default: str
     confidence: float = Field(default=0.8, ge=0.0, le=1.0)
-    # Global logit shift applied to every pass head right after classification:
-    #     p = sigmoid(logit_or_z + confidence_bias)
-    # That shifted p is THE probability the gateway reasons with — the confidence gate,
-    # the default's escalation check, the forced-effort check and the kappa_usd score all
-    # read it. Length heads ("<label>:len") are never shifted. Telemetry keeps the
-    # unshifted probabilities plus this value so decisions can be replayed. Fitted per
-    # classifier release so a fixed `confidence` keeps the same deflection level on a
-    # frozen prompt set (er-bench docs/CALIBRATION.md). 0.0 = unshifted, bit-identical
-    # to before the field existed.
-    confidence_bias: float = Field(default=0.0, ge=-10.0, le=10.0)
-    # One switch for the cost-aware extension below (length-head output pricing +
-    # kappa_usd). Off by default: a classifier that starts emitting "<model>:len" heads
-    # changes nothing until a deployment opts in, and opting out again is a config
-    # edit, not a code revert. With it off, kappa_usd and len_correction are inert.
-    cost_aware: bool = False
-    # Cost-aware selection among the confident candidates (plus the gate-exempt default):
-    #     score_m = estimated_cost_m + kappa_usd * (1 - P_m)
-    # kappa_usd is the dollar penalty charged to one expected failure ("what a miss
-    # costs us"); 0 keeps the plain cheapest-confident-candidate comparison. `confidence`
-    # stays the hard floor (tau_min): a model below it is never a candidate.
-    kappa_usd: float = Field(default=0.0, ge=0.0)
-    # Classifiers trained with length heads ("<model>:len" = that model's normalized log
-    # output length on this request, see routing/labels.py) give a per-model expected
-    # output size; exp(mean log) runs short on heavy tails, so one global multiplier
-    # corrects it (fit offline; 1.0 = raw). Ignored when the classifier has no length heads.
-    len_correction: float = Field(default=1.0, gt=0.0)
-    # Normalization anchors of the classifier's length heads: the head emits
-    #     y = (log tokens - log len_floor_tokens) / (log len_cap_tokens - log len_floor_tokens)
-    # clipped to [0, 1], and the gateway inverts it with the SAME two constants, so they
-    # must match the values the classifier was trained with (routerbench builder
-    # ROUTER_LEN_FLOOR / ROUTER_LEN_CAP; recorded in that dataset's summary.json
-    # "len_heads"). Defaults are the 32K-contract classifiers' values; a classifier
-    # trained on the uncapped label family uses len_cap_tokens = 131072. Per
-    # deployment, never global: changing the constants under a running classifier
-    # silently rescales every expected-output estimate.
-    len_floor_tokens: int = Field(default=100, ge=1)
-    len_cap_tokens: int = Field(default=32000, ge=2)
     # Deprecated no-op, accepted so configs written while escalation was a toggle
     # still load. Upward escalation (route to the cheapest confident model when the
     # default's own head is below the gate, even if it costs more) is now always on.

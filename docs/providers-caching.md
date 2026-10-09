@@ -12,9 +12,10 @@ by the catalog, not your config.
 | `kimi-k2.7-code` | OpenRouter | `moonshotai/kimi-k2.7-code` | 256K |
 
 Provider API keys come from the environment (`ANTHROPIC_API_KEY`,
-`OPENROUTER_API_KEY`, `ZAI_API_KEY` when GLM is configured with
-`"provider": "zai"`), loaded from `~/.emissary-router/.env` if present. Only the
-providers used by enabled models need keys.
+`OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY` / `ZAI_API_KEY` for the native
+Gemini / GLM opt-ins, `CLOUDFLARE_API_TOKEN` for the benchmark-only Auto Router entry),
+loaded from `~/.emissary-router/.env` if present. Only the providers used by enabled
+models need keys. The full model table lives in [pricing](pricing.md).
 
 ### Z.ai native for GLM
 
@@ -26,6 +27,31 @@ provider: z.ai signs thinking blocks with its own opaque signatures, which real
 Anthropic rejects on replay — the router restamps them with the same synthetic
 marker the OpenRouter path uses, so switching models mid-session stays safe in
 both directions (both verified live).
+
+### Cloudflare AI Gateway Auto Router (benchmark only)
+
+`cloudflare-auto` (upstream `cloudflare/auto`) is a competitor router, like
+`openrouter-auto`: Cloudflare's gateway picks a model per request from its own pool.
+It is gated behind `EMISSARY_ROUTER_BENCH_EXTRAS` and only makes sense as a
+single-model condition (the classifier has no head for it). It speaks the
+chat-completions wire format at
+`https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/compat/chat/completions`,
+so the request/response translation is the OpenRouter provider's; the gateway's own
+conventions differ in four places, all handled in `providers/cloudflare.py`:
+
+- auth is `cf-aig-authorization: Bearer $CLOUDFLARE_API_TOKEN`; model keys are the
+  ones stored in the gateway or Cloudflare's unified billing;
+- the client's session id goes out as `cf-aig-session-id` — Auto Router keeps one
+  model per turn only when it sees it, which is what lets prompt caching work;
+- the served model comes back in response headers (`cf-aig-routed-model`,
+  `cf-aig-routing-reason`), recorded in telemetry's `raw_event` as `routed_model` /
+  `routing_reason`; there is no billed-cost field, so the bench ledger prices calls
+  per routed model;
+- the gateway's response cache is bypassed per request (`cf-aig-skip-cache`).
+
+Thinking/effort is never forwarded: Auto Router does not support thinking controls
+yet, so the chosen model runs at its own defaults. `CLOUDFLARE_ALLOWED_MODELS`
+(comma-separated `provider/model`, `*` allowed within a provider) restricts the pool.
 
 ## Gemini: OpenRouter by default, Google native opt-in
 

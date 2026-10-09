@@ -3,6 +3,7 @@ from __future__ import annotations
 from emissary_router.config import ProviderConfig
 from emissary_router.providers.anthropic import AnthropicProvider
 from emissary_router.providers.base import Provider
+from emissary_router.providers.cloudflare import CloudflareProvider
 from emissary_router.providers.google import GoogleProvider
 from emissary_router.providers.openai import OpenAIProvider
 from emissary_router.providers.openrouter import OpenRouterProvider
@@ -21,14 +22,6 @@ def build_provider(name: str, config: ProviderConfig) -> Provider:
         return OpenAIProvider(config)
     if provider_type == "zai":
         return ZaiProvider(config)
-    if provider_type == "vllm":
-        # A self-hosted OpenAI-compatible server. Reuses the OpenRouter
-        # translation wholesale; VLLM_BASE_URL points at .../v1/chat/completions.
-        import os
-        cfg = config.model_copy(update={
-            "base_url": config.base_url or os.environ.get("VLLM_BASE_URL"),
-        })
-        if not cfg.base_url:
-            raise ValueError("vllm provider requires VLLM_BASE_URL")
-        return OpenRouterProvider(cfg)
+    if provider_type == "cloudflare":
+        return CloudflareProvider(config)
     raise ValueError(f"unsupported provider {name}: {provider_type}")

@@ -89,24 +89,19 @@ Toggle models in `~/.emissary-router/config.json`:
 }
 ```
 
-Built-in models:
+Built-in models — the same set, upstream ids and prices as the Emissary platform
+gateway's catalog (see [pricing](docs/pricing.md) for the table):
 
-- `deepseek-v4-flash` — OpenRouter (the router's cost anchor; deliberately the BASE
-  model id, not `-latest`/`-0731`)
-- `gpt-5.6-luna` — OpenAI (native **Responses API**; cheapest model in the catalog,
-  strong math/knowledge and top-tier abstention; reasoning is the provider default)
-- `gpt-5.6-terra` / `gpt-5.6-sol` — OpenAI Responses API (disabled by default —
-  dominated in the router-level ablation; enable per-config)
-- `claude-sonnet-5` — Anthropic or OpenRouter (default; adaptive thinking is the
-  provider default, and the router strips client `temperature`/`top_p` — the claude-5
-  series rejects them)
-- `claude-opus-5` — Anthropic or OpenRouter (escalation-grade premium; same claude-5
-  sampling-param handling)
-- `claude-haiku-4.5` — Anthropic or OpenRouter
-- `gemini-3.1-flash-lite` — OpenRouter, or native Google (`provider: "google"`)
-- `glm-5.2` — OpenRouter, or native Z.ai (`provider: "zai"`, e.g. a GLM Coding Plan key)
-- `kimi-k2.7-code` — OpenRouter (always reasons; thinking can't be disabled)
-- `kimi-k3` — OpenRouter (disabled by default — enable per-config for baselines/benchmarks)
+- Anthropic (or OpenRouter): `claude-opus-5`, `claude-opus-5.5`, `claude-sonnet-5`,
+  `claude-sonnet-5.5`, `claude-haiku-4.5` — adaptive thinking is the claude-5 default;
+  the router strips client `temperature`/`top_p`, which the claude-5 series rejects.
+- OpenAI (native Responses API, or OpenRouter): `gpt-5.6-luna`, `gpt-5.6-terra`,
+  `gpt-5.6-sol`, `gpt-6-luna`, `gpt-6-sol`, `gpt-6.1-sol`.
+- OpenRouter: `deepseek-v4-flash` (and its `-0731` snapshot alias),
+  `deepseek-v4.1-flash`, `qwen3.8-flash`, `qwen3.8-omni-flash`, `glm-5.3`,
+  `glm-5.3-flash`, `kimi-k2.7-code` (always reasons), `kimi-k3`.
+- `gemini-3.1-flash-lite` — OpenRouter, or native Google (`provider: "google"`).
+- `glm-5.2` — OpenRouter, or native Z.ai (`provider: "zai"`, e.g. a GLM Coding Plan key).
 
 Set `enabled: false` to drop a model, and `provider` to choose how it's served.
 Users cannot add arbitrary upstream models in V1; model id and pricing are owned by

@@ -89,6 +89,7 @@ def build_dashboard_router(
                     "providers": list(spec.providers.keys()),
                     "provider": selected,
                     "default_provider": spec.default_provider,
+                    "effort_routing": bool(entry and entry.effort_routing),
                 }
             )
         return JSONResponse(
@@ -113,14 +114,23 @@ def build_dashboard_router(
                     new_models[name] = prev
                 continue
             if isinstance(req, bool):
-                enabled, provider = req, None
+                enabled, provider, effort_routing = req, None, None
             else:
                 enabled = bool(req.get("enabled", True))
                 provider = req.get("provider")
-            if provider is None and isinstance(prev, dict):
-                provider = prev.get("provider")
-            if provider:
-                new_models[name] = {"enabled": enabled, "provider": provider}
+                effort_routing = req.get("effort_routing")
+            if isinstance(prev, dict):
+                if provider is None:
+                    provider = prev.get("provider")
+                if effort_routing is None:
+                    effort_routing = prev.get("effort_routing")
+            if provider or effort_routing:
+                entry: dict = {"enabled": enabled}
+                if provider:
+                    entry["provider"] = provider
+                if effort_routing:
+                    entry["effort_routing"] = True
+                new_models[name] = entry
             else:
                 new_models[name] = enabled
         raw["models"] = new_models

@@ -26,7 +26,7 @@ class _Est:
 def _patch_costs(monkeypatch, costs):
     import emissary_router.routing.policy as pol
     monkeypatch.setattr(pol, "estimate_cost",
-                        lambda config, name, feats, ledger: _Est(name, costs[name]))
+                        lambda config, name, feats, ledger, *a: _Est(name, costs[name]))
     monkeypatch.setattr(pol, "is_cheaper",
                         lambda a, b: a.total_usd < b.total_usd)
 

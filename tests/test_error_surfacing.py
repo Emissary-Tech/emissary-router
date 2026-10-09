@@ -51,7 +51,6 @@ class _FakeProvider:
 def _config():
     return AppConfig.model_validate(
         {
-            "router": {"data_format": "probs"},  # the fakes above return probabilities
             "models": {"claude-sonnet-5": True, "gemini-3.1-flash-lite": True},
             "default": "claude-sonnet-5",
         }
@@ -61,7 +60,6 @@ def _config():
 def _config_with_haiku():
     return AppConfig.model_validate(
         {
-            "router": {"data_format": "probs"},  # the fakes above return probabilities
             "models": {
                 "claude-sonnet-5": True,
                 "claude-haiku-4.5": True,
