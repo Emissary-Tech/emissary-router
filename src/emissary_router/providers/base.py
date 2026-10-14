@@ -30,6 +30,23 @@ def strip_cch_text(text: str) -> str:
     return CCH_ATTRIBUTION_LINE_RE.sub("", text)
 
 
+def last_cache_control(content) -> dict | None:
+    """The `cache_control` of the last marked block in a message's content, else None.
+
+    Claude Code (2.1.299 measured; newer Claude models) puts its per-turn conversation
+    cache breakpoint on a trailing role:"system" message. Any rewrite of that message
+    must carry the mark over, or the whole conversation is billed at full price every
+    call (only system+tools stay cached — the 2026-10-14 bench fingerprint)."""
+    if isinstance(content, dict):
+        cc = content.get("cache_control")
+        return cc if isinstance(cc, dict) else None
+    if isinstance(content, list):
+        for block in reversed(content):
+            if isinstance(block, dict) and isinstance(block.get("cache_control"), dict):
+                return block["cache_control"]
+    return None
+
+
 def sanitize_tool_id(tool_id: str | None) -> str | None:
     """Map a tool id to an Anthropic-valid one, deterministically.
 

@@ -11,6 +11,7 @@ from emissary_router.caching.usage import Usage
 from emissary_router.config import ProviderConfig, ResolvedModel
 from emissary_router.schemas import AnthropicRequest, RequestContext
 from emissary_router.providers.base import ProviderComplete
+from emissary_router.providers.base import last_cache_control
 from emissary_router.providers.base import sanitize_tool_id, strip_cch_text
 from emissary_router.providers.thinking import (
     SYNTHETIC_THINKING_SIGNATURE,
@@ -331,7 +332,15 @@ class AnthropicProvider:
                 if text:
                     if "<system-reminder" not in text:
                         text = f"<system-reminder>\n{text}\n</system-reminder>"
-                    remaining.append({"role": "user", "content": [{"type": "text", "text": text}]})
+                    block: dict = {"type": "text", "text": text}
+                    # Claude Code's per-turn conversation cache breakpoint rides on this
+                    # trailing system message (2.1.299, opus-5: measured). Dropping it
+                    # here left only system+tools cached and re-billed the conversation
+                    # at full price on every call.
+                    cache_control = last_cache_control(message.get("content"))
+                    if cache_control:
+                        block["cache_control"] = cache_control
+                    remaining.append({"role": "user", "content": [block]})
         if not changed:
             return
         body["messages"] = remaining

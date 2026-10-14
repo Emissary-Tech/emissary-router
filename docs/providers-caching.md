@@ -71,6 +71,19 @@ conventions differ in these places, all handled in `providers/cloudflare.py`:
 Thinking/effort is never forwarded: Auto Router ignores `reasoning_effort` (measured:
 no direction between low and high), so the chosen model runs at its own defaults.
 
+### Claude Code's trailing system-reminder breakpoint
+
+Claude Code (2.1.299 measured; newer Claude models such as opus-5) ends every request
+with a `role:"system"` message that carries the conversation's cache breakpoint. The
+providers rewrite that message for models that reject inline system roles (Anthropic:
+converted in place to a `<system-reminder>` user block; OpenRouter: a user part), and
+the rewrite must keep the `cache_control` mark — `providers/base.last_cache_control`.
+Without it only system+tools stay cached and the whole conversation is billed at full
+price on every call (2026-10-14 bench fingerprint: `cache_read` frozen at the prefix,
+`cache_creation` 0 after turn 1, `input_tokens` growing to 30K per call). Claude Code
+pins the mark on the last user block for older models (haiku-4.5), which is why a
+haiku-only check does not reproduce it.
+
 ## Gemini: OpenRouter by default, Google native opt-in
 
 Native Google Gemini 3 function calling requires `thoughtSignature` values to be

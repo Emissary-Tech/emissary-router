@@ -13,6 +13,7 @@ from emissary_router.caching.usage import Usage
 from emissary_router.config import ProviderConfig, ResolvedModel
 from emissary_router.schemas import AnthropicRequest, RequestContext
 from emissary_router.providers.base import ProviderComplete, sanitize_tool_id, strip_cch_text
+from emissary_router.providers.base import last_cache_control
 from emissary_router.providers.thinking import (
     SYNTHETIC_THINKING_SIGNATURE,
     accepts_effort_for_model,
@@ -655,12 +656,20 @@ class OpenRouterProvider:
                 inline = strip_cch_text(cls._stringify(message.get("content")))
                 if not inline:
                     continue
+                cache_control = last_cache_control(message.get("content"))
                 if leading:
-                    system_parts.append((inline, None))
+                    system_parts.append((inline, cache_control))
                 else:
                     if "<system-reminder" not in inline:
                         inline = f"<system-reminder>\n{inline}\n</system-reminder>"
-                    body_messages.append({"role": "user", "content": inline})
+                    # keep Claude Code's trailing conversation breakpoint (see
+                    # providers/base.last_cache_control) — anthropic-family models via
+                    # OpenRouter bill every input token at full rate without it
+                    body_messages.append({
+                        "role": "user",
+                        "content": [{"type": "text", "text": inline, "cache_control": cache_control}]
+                        if cache_control else inline,
+                    })
                 continue
             leading = False
             body_messages.append(message)
