@@ -25,3 +25,5 @@ class RouteDecision:
     probabilities: dict[str, float]
     estimated_costs: dict[str, dict] | None = None
     cache_prediction: dict | None = None
+    # models the context guard dropped for this request (telemetry; None = none)
+    context_excluded: list[str] | None = None

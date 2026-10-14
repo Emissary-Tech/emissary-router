@@ -10,6 +10,9 @@ from typing import Any
 EFFORT_ORDER = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 SUPPORTED_THINKING_TYPES = {"enabled", "disabled"}
 DEFAULT_MAX_THINKING_BUDGET = 32000
+# Anthropic rejects thinking.budget_tokens below this (400 "Input should be greater than or
+# equal to 1024"); a budget-model request whose max_tokens cannot fit it runs without thinking.
+ANTHROPIC_MIN_THINKING_BUDGET = 1024
 EFFORT_KEYS = {"effort", "reasoning_effort", "thinking_effort"}
 SKIP_REWRITE_KEYS = {"messages", "system", "tools"}
 
@@ -393,10 +396,19 @@ def normalize_anthropic_thinking_for_model(
                     else:
                         original_type = item.get("type")
                         budget = thinking_budget_from_max_tokens(body)
-                        value[key] = {"type": "enabled", "budget_tokens": budget}
-                        changes.append(
-                            f"{child_path}={original_type}->enabled(budget={budget})"
-                        )
+                        if budget < ANTHROPIC_MIN_THINKING_BUDGET:
+                            # max_tokens too small for a legal budget (measured: haiku-4.5,
+                            # max_tokens 600 -> budget 599 -> upstream 400 masked as an
+                            # empty 200 stream); thinking off beats a dead request
+                            value[key] = {"type": "disabled"}
+                            changes.append(
+                                f"{child_path}={original_type}->disabled(max_tokens too small for budget>={ANTHROPIC_MIN_THINKING_BUDGET})"
+                            )
+                        else:
+                            value[key] = {"type": "enabled", "budget_tokens": budget}
+                            changes.append(
+                                f"{child_path}={original_type}->enabled(budget={budget})"
+                            )
                 elif key in EFFORT_KEYS and isinstance(item, str):
                     if not capabilities.accepts_effort_param:
                         del value[key]

@@ -136,62 +136,7 @@ class AnthropicProvider:
         headers["accept-encoding"] = "identity"
 
         if body.get("stream"):
-            async def gen():
-                buf = bytearray()
-                status: int | None = None
-                error: str | None = None
-                async with httpx.AsyncClient(timeout=None) as client:
-                    try:
-                        async with client.stream(
-                            "POST",
-                            f"{self._base_url}/v1/messages",
-                            headers=headers,
-                            json=body,
-                        ) as response:
-                            status = response.status_code
-                            if not self.REWRITES_RESPONSES:
-                                async for chunk in response.aiter_raw():
-                                    buf.extend(chunk)
-                                    yield chunk
-                            else:
-                                # Line-buffered so rewrite hooks see complete SSE
-                                # lines regardless of chunk boundaries.
-                                pending = b""
-                                async for chunk in response.aiter_raw():
-                                    pending += chunk
-                                    while (newline := pending.find(b"\n")) != -1:
-                                        line = pending[:newline].decode("utf-8", "replace")
-                                        pending = pending[newline + 1 :]
-                                        out = (self._rewrite_sse_line(line) + "\n").encode("utf-8")
-                                        buf.extend(out)
-                                        yield out
-                                if pending:
-                                    buf.extend(pending)
-                                    yield bytes(pending)
-                    except Exception as exc:
-                        error = repr(exc)
-                        raise
-                    finally:
-                        if status is not None and status >= 400:
-                            logger.warning(
-                                "anthropic upstream %s | %s | bad_tool_ids=%s | error_body=%s",
-                                status,
-                                _request_summary(body),
-                                _invalid_tool_ids(body),
-                                buf.decode("utf-8", "replace")[:800],
-                            )
-                        self._complete(
-                            on_complete,
-                            self._usage_from_sse(buf.decode("utf-8", "replace")),
-                            {
-                                "http_status": status,
-                                "stream": True,
-                                "error": error,
-                                "thinking_normalization": thinking_changes,
-                            },
-                        )
-
-            return StreamingResponse(gen(), media_type="text/event-stream")
+            return await self._open_stream(body, headers, thinking_changes, on_complete)
 
         async with httpx.AsyncClient(timeout=None) as client:
             response = await client.post(f"{self._base_url}/v1/messages", headers=headers, json=body)
@@ -230,6 +175,117 @@ class AnthropicProvider:
                 response.content,
                 status_code=response.status_code,
                 media_type=response.headers.get("content-type", "text/plain"),
+            )
+
+    async def _open_stream(
+        self,
+        body: dict,
+        headers: dict[str, str],
+        thinking_changes: list[str],
+        on_complete: ProviderComplete | None,
+    ) -> Response:
+        """Open the upstream stream, then decide the response shape.
+
+        Pre-body upstream errors return the REAL status code and body: Starlette commits
+        a StreamingResponse's status before the first chunk, so opening the stream inside
+        the generator turned every upstream 4xx into a 200 whose "SSE" body was a bare
+        error JSON — Claude Code reads that as an empty/malformed response and just
+        retries (measured 2026-10-14: haiku-4.5 budget 400). Only a 2xx hands off to the
+        relay, the same contract as the OpenRouter/OpenAI/Google providers.
+        """
+        client = httpx.AsyncClient(timeout=None)
+        try:
+            request = client.build_request(
+                "POST", f"{self._base_url}/v1/messages", headers=headers, json=body
+            )
+            response = await client.send(request, stream=True)
+        except Exception:
+            await client.aclose()
+            raise
+
+        if response.status_code >= 400:
+            status = response.status_code
+            raw = await response.aread()
+            await response.aclose()
+            await client.aclose()
+            text = raw.decode("utf-8", "replace")
+            logger.warning(
+                "anthropic upstream %s | %s | bad_tool_ids=%s | error_body=%s",
+                status,
+                _request_summary(body),
+                _invalid_tool_ids(body),
+                text[:800],
+            )
+            self._complete(
+                on_complete,
+                Usage(),
+                {
+                    "http_status": status,
+                    "stream": True,
+                    "error": (text or "upstream error")[:300],
+                    "thinking_normalization": thinking_changes,
+                },
+            )
+            # Anthropic's own error JSON, verbatim, under its own status: the client's
+            # status-based handling (400 surfacing, 429/529 backoff) keeps working.
+            return Response(
+                raw,
+                status_code=status,
+                media_type=response.headers.get("content-type", "application/json"),
+            )
+
+        return StreamingResponse(
+            self._relay_stream(client, response, thinking_changes, on_complete),
+            media_type="text/event-stream",
+        )
+
+    async def _relay_stream(
+        self,
+        client: httpx.AsyncClient,
+        response: httpx.Response,
+        thinking_changes: list[str],
+        on_complete: ProviderComplete | None,
+    ):
+        """Relay an already-open (2xx) Anthropic SSE stream, line-buffered when rewrite
+        hooks are active so they see complete SSE lines regardless of chunking."""
+        buf = bytearray()
+        status = response.status_code
+        error: str | None = None
+        try:
+            if not self.REWRITES_RESPONSES:
+                async for chunk in response.aiter_raw():
+                    buf.extend(chunk)
+                    yield chunk
+            else:
+                pending = b""
+                async for chunk in response.aiter_raw():
+                    pending += chunk
+                    while (newline := pending.find(b"\n")) != -1:
+                        line = pending[:newline].decode("utf-8", "replace")
+                        pending = pending[newline + 1 :]
+                        out = (self._rewrite_sse_line(line) + "\n").encode("utf-8")
+                        buf.extend(out)
+                        yield out
+                if pending:
+                    buf.extend(pending)
+                    yield bytes(pending)
+        except Exception as exc:
+            error = repr(exc)
+            raise
+        finally:
+            try:
+                await response.aclose()
+            finally:
+                await client.aclose()
+            self._complete(
+                on_complete,
+                self._usage_from_sse(buf.decode("utf-8", "replace")),
+                {
+                    "http_status": status,
+                    "stream": True,
+                    "error": error,
+                    "thinking_normalization": thinking_changes,
+                },
             )
 
     def usage_from_response(self, payload: dict) -> Usage:

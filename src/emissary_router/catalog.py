@@ -23,6 +23,10 @@ class ModelSpec:
     providers: dict[ProviderName, str]
     default_provider: ProviderName
     pricing: TokenPricing
+    # Largest prompt+output the provider accepts, in tokens (platform catalog values).
+    # Routing's context guard excludes a model whose window the request already exceeds;
+    # None (unknown) never excludes.
+    context_window: int | None = None
 
 
 def cost_score(spec: ModelSpec) -> float:
@@ -54,6 +58,7 @@ CATALOG: dict[str, ModelSpec] = {
         providers={"openrouter": "deepseek/deepseek-v4-flash"},
         default_provider="openrouter",
         pricing=_price(0.14, 0.28, 0.028, 0.14),
+        context_window=1_000_000,
     ),
     # Snapshot-named alias (the emissary-qwen-router classifier labels deepseek by
     # its snapshot name).
@@ -62,6 +67,7 @@ CATALOG: dict[str, ModelSpec] = {
         providers={"openrouter": "deepseek/deepseek-v4-flash-0731"},
         default_provider="openrouter",
         pricing=_price(0.14, 0.28, 0.028, 0.14),
+        context_window=1_000_000,
     ),
     "gpt-6-luna": ModelSpec(
         name="gpt-6-luna",
@@ -70,12 +76,14 @@ CATALOG: dict[str, ModelSpec] = {
         providers={"openai": "gpt-6-luna", "openrouter": "openai/gpt-6-luna"},
         default_provider="openai",
         pricing=_price(0.10, 0.50, 0.01, 0.125),
+        context_window=1_050_000,
     ),
     "qwen3.8-omni-flash": ModelSpec(
         name="qwen3.8-omni-flash",
         providers={"openrouter": "qwen/qwen3.8-omni-flash"},
         default_provider="openrouter",
         pricing=_price(0.15, 0.47, 0.016, 0.15),
+        context_window=1_000_000,
     ),
     # Same price and host as omni-flash; the router heads are trained on omni data.
     "qwen3.8-flash": ModelSpec(
@@ -83,18 +91,21 @@ CATALOG: dict[str, ModelSpec] = {
         providers={"openrouter": "qwen/qwen3.8-flash"},
         default_provider="openrouter",
         pricing=_price(0.15, 0.47, 0.016, 0.20),
+        context_window=1_000_000,
     ),
     "deepseek-v4.1-flash": ModelSpec(
         name="deepseek-v4.1-flash",
         providers={"openrouter": "deepseek/deepseek-v4.1-flash"},
         default_provider="openrouter",
         pricing=_price(0.15, 0.60, 0.003, 0.15),
+        context_window=1_048_576,
     ),
     "gpt-5.6-luna": ModelSpec(
         name="gpt-5.6-luna",
         providers={"openai": "gpt-5.6-luna", "openrouter": "openai/gpt-5.6-luna"},
         default_provider="openai",
         pricing=_price(0.20, 1.20, 0.02, 0.25),
+        context_window=1_050_000,
     ),
     "gemini-3.1-flash-lite": ModelSpec(
         name="gemini-3.1-flash-lite",
@@ -103,6 +114,7 @@ CATALOG: dict[str, ModelSpec] = {
         providers={"openrouter": "google/gemini-3.1-flash-lite", "google": "gemini-3.1-flash-lite"},
         default_provider="openrouter",
         pricing=_price(0.25, 1.50, 0.025, 0.25),
+        context_window=1_000_000,
     ),
     "kimi-k2.7-code": ModelSpec(
         name="kimi-k2.7-code",
@@ -110,12 +122,14 @@ CATALOG: dict[str, ModelSpec] = {
         providers={"openrouter": "moonshotai/kimi-k2.7-code"},
         default_provider="openrouter",
         pricing=_price(0.95, 4.00, 0.19, 0.95),
+        context_window=262_000,
     ),
     "claude-haiku-4.5": ModelSpec(
         name="claude-haiku-4.5",
         providers={"anthropic": "claude-haiku-4-5", "openrouter": "anthropic/claude-haiku-4.5"},
         default_provider="anthropic",
         pricing=_price(1.00, 5.00, 0.10, 1.25),
+        context_window=200_000,
     ),
     "glm-5.2": ModelSpec(
         name="glm-5.2",
@@ -124,24 +138,28 @@ CATALOG: dict[str, ModelSpec] = {
         providers={"openrouter": "z-ai/glm-5.2", "zai": "glm-5.2"},
         default_provider="openrouter",
         pricing=_price(1.40, 4.40, 0.26, 1.40),
+        context_window=1_048_576,
     ),
     "glm-5.3": ModelSpec(
         name="glm-5.3",
         providers={"openrouter": "z-ai/glm-5.3"},
         default_provider="openrouter",
         pricing=_price(1.40, 4.40, 0.26, 1.40),
+        context_window=1_048_576,
     ),
     "glm-5.3-flash": ModelSpec(
         name="glm-5.3-flash",
         providers={"openrouter": "z-ai/glm-5.3-flash"},
         default_provider="openrouter",
         pricing=_price(0.15, 0.50, 0.03, 0.15),
+        context_window=1_048_576,
     ),
     "gpt-5.6-terra": ModelSpec(
         name="gpt-5.6-terra",
         providers={"openai": "gpt-5.6-terra", "openrouter": "openai/gpt-5.6-terra"},
         default_provider="openai",
         pricing=_price(2.00, 12.00, 0.20, 2.50),
+        context_window=1_050_000,
     ),
     "claude-sonnet-5": ModelSpec(
         name="claude-sonnet-5",
@@ -150,48 +168,56 @@ CATALOG: dict[str, ModelSpec] = {
         providers={"anthropic": "claude-sonnet-5", "openrouter": "anthropic/claude-sonnet-5"},
         default_provider="anthropic",
         pricing=_price(2.00, 10.00, 0.20, 2.50),
+        context_window=1_000_000,
     ),
     "claude-sonnet-5.5": ModelSpec(
         name="claude-sonnet-5.5",
         providers={"anthropic": "claude-sonnet-5-5", "openrouter": "anthropic/claude-sonnet-5.5"},
         default_provider="anthropic",
         pricing=_price(2.00, 10.00, 0.10, 2.50),
+        context_window=1_000_000,
     ),
     "gpt-6-sol": ModelSpec(
         name="gpt-6-sol",
         providers={"openai": "gpt-6-sol", "openrouter": "openai/gpt-6-sol"},
         default_provider="openai",
         pricing=_price(2.00, 10.00, 0.20, 2.50),
+        context_window=1_050_000,
     ),
     "gpt-6.1-sol": ModelSpec(
         name="gpt-6.1-sol",
         providers={"openai": "gpt-6.1-sol", "openrouter": "openai/gpt-6.1-sol"},
         default_provider="openai",
         pricing=_price(2.00, 10.00, 0.10, 2.50),
+        context_window=1_050_000,
     ),
     "kimi-k3": ModelSpec(
         name="kimi-k3",
         providers={"openrouter": "moonshotai/kimi-k3"},
         default_provider="openrouter",
         pricing=_price(3.00, 15.00, 0.30, 3.00),
+        context_window=1_048_576,
     ),
     "gpt-5.6-sol": ModelSpec(
         name="gpt-5.6-sol",
         providers={"openai": "gpt-5.6-sol", "openrouter": "openai/gpt-5.6-sol"},
         default_provider="openai",
         pricing=_price(4.00, 20.00, 0.40, 5.00),
+        context_window=1_050_000,
     ),
     "claude-opus-5.5": ModelSpec(
         name="claude-opus-5.5",
         providers={"anthropic": "claude-opus-5-5", "openrouter": "anthropic/claude-opus-5.5"},
         default_provider="anthropic",
         pricing=_price(4.00, 20.00, 0.20, 5.00),
+        context_window=1_000_000,
     ),
     "claude-opus-5": ModelSpec(
         name="claude-opus-5",
         providers={"anthropic": "claude-opus-5", "openrouter": "anthropic/claude-opus-5"},
         default_provider="anthropic",
         pricing=_price(5.00, 25.00, 0.50, 6.25),
+        context_window=1_000_000,
     ),
 }
 

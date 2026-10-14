@@ -20,6 +20,12 @@ class RequestCostFeatures:
     estimated_cacheable_prefix_tokens: int
     estimated_fresh_input_tokens: int
     expected_output_tokens: int
+    # The output room the CLIENT asked for (`max_tokens`), None when it sent none. The
+    # context guard reserves this, not the expected-output estimate: providers reject a
+    # request whose input + max_tokens exceeds the window (OpenRouter, measured
+    # 2026-10-14: "maximum context length is 262144 tokens. However, you requested about
+    # 444277 tokens (380277 of text input, 64000 in the output)").
+    output_ceiling_tokens: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -87,6 +93,7 @@ def extract_request_cost_features(
         estimated_cacheable_prefix_tokens=cacheable_prefix_tokens,
         estimated_fresh_input_tokens=fresh_input_tokens,
         expected_output_tokens=_expected_output_tokens(body, expected_output_tokens),
+        output_ceiling_tokens=_output_ceiling(body),
     )
 
 
@@ -229,6 +236,15 @@ def _estimate_content_tokens(value: Any) -> int:
     if isinstance(value, list):
         return sum(_estimate_content_tokens(item) for item in value)
     return 1
+
+
+def _output_ceiling(body: dict[str, Any]) -> int | None:
+    """The request's own output cap (`max_tokens`), None when absent or non-positive."""
+    try:
+        ceiling = int(body.get("max_tokens") or 0)
+    except (TypeError, ValueError):
+        return None
+    return ceiling if ceiling > 0 else None
 
 
 def _expected_output_tokens(body: dict[str, Any], rolling: int | None = None) -> int:

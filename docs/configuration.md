@@ -229,6 +229,25 @@ or persisted, and resets on restart (it re-warms within a turn). The default
 Anthropic cache behavior is tracked directly (`predictable`); OpenRouter implicit
 caching is credited only after an observed cache read (`best_effort`).
 
+### Context guard
+
+A model whose context window the request already exceeds is not a candidate for that
+request. The estimate is the request's input (system + tools + conversation, ~4
+chars/token) plus the output room the client asked for (`max_tokens`; the rolling
+expected-output estimate when no cap was sent), compared with the catalog's
+`context_window` (platform values; `None` never excludes). Reserving the full cap is
+what OpenRouter and OpenAI do — OpenRouter rejects "about 444277 tokens (380277 of text
+input, 64000 in the output)" against a 262144 window (measured 2026-10-14) — so a
+smaller reserve would admit a model the provider then refuses. Anthropic checks the
+input alone (147K input + a 64K cap on 200K haiku-4.5 was served, same day), so there
+the full reserve is conservative by design. If the configured default
+cannot take the request, the priciest fitting model stands in as the anchor; if nothing
+fits, the default serves with `route_reason=context_exceeds_config` and the provider's
+own "prompt is too long" error reaches the client untouched — that error is the agent's
+signal to compact, never masked. The check is stateless: once the agent compacts, the
+excluded models are eligible again on the next request. Telemetry keeps the excluded
+names in `raw_event.context_excluded`.
+
 ### Effort routing
 
 A classifier trained with effort arms emits one head per (model, effort) —

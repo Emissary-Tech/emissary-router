@@ -39,7 +39,7 @@ request/response bodies and prompt text are never stored, only the metadata belo
 columns cannot: the classifier's per-head probabilities (`probs`, effort arms
 included) and the serving `tau`; for dynamic competitor routers the model they
 actually served (`routed_model`, `routing_reason`), OpenRouter's billed `or_cost`, and Cloudflare's `gateway_request_id` (its `cf-aig-request-id`; the bench joins its per-request cost log on the `cf-aig-metadata` request id instead);
-and for effort routing the head read for the served model (`effort_head`,
+the models the context guard dropped for the request (`context_excluded`; the row's `route_reason` is `context_exceeds_config` when nothing fit); and for effort routing the head read for the served model (`effort_head`,
 `effort_head_reason`), the effort forced (`forced_effort`) and the request fields
 rewritten (`effort_changes`).
 

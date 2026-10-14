@@ -191,6 +191,7 @@ class RouterPipeline:
                 raw_event=_routed_raw_event(
                     provider_metadata, model.model_id, probs, self._config.confidence,
                     pick=pick, effort_changes=effort_changes,
+                    context_excluded=decision.context_excluded,
                 ),
                 **usage_tokens(usage),
             )
@@ -275,6 +276,7 @@ def _routed_raw_event(
     tau: float | None = None,
     pick: HeadPick | None = None,
     effort_changes: list[str] | None = None,
+    context_excluded: list[str] | None = None,
 ) -> str | None:
     """For dynamic-router calls (openrouter/auto, cloudflare/auto), keep the
     actually-routed model and the provider's own credit cost — the response is the
@@ -295,6 +297,10 @@ def _routed_raw_event(
         })
     if provider_metadata.get("routing_reason"):
         payload["routing_reason"] = provider_metadata["routing_reason"]
+    if context_excluded:
+        # models the context guard dropped for this request (their window < the
+        # estimated prompt + expected output); the bench counts how often it fires
+        payload["context_excluded"] = list(context_excluded)
     if probabilities:
         payload["probs"] = {k: round(v, 4) for k, v in probabilities.items()}
         if tau is not None:
