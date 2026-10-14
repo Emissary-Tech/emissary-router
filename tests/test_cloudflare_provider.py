@@ -1,6 +1,8 @@
 """Cloudflare AI Gateway Auto Router provider (bench-only competitor)."""
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from emissary_router.config import ProviderConfig
@@ -32,8 +34,45 @@ def test_headers_carry_gateway_auth_session_and_skip_cache(monkeypatch):
     assert headers["cf-aig-skip-cache"] == "true"
     assert headers["cf-aig-allowed-models"] == "anthropic/*,openai/gpt-5.6-luna"
     assert "Authorization" not in headers and "X-OpenRouter-Metadata" not in headers
-    # no session -> no affinity header
-    assert "cf-aig-session-id" not in provider._request_headers(_ctx(None))
+    # the join key with the gateway's own per-request log (its `metadata` field)
+    assert json.loads(headers["cf-aig-metadata"]) == {"request_id": "r1", "session": "sess-1"}
+    # no session -> no affinity header, metadata keeps the request id
+    headers = provider._request_headers(_ctx(None))
+    assert "cf-aig-session-id" not in headers
+    assert json.loads(headers["cf-aig-metadata"]) == {"request_id": "r1"}
+
+
+def test_condition_pool_beats_the_env_pool(monkeypatch):
+    monkeypatch.setenv("CLOUDFLARE_ALLOWED_MODELS", "anthropic/*")
+    cfg = ProviderConfig(type="cloudflare", api_key="tok", base_url="https://gw.example/compat/chat/completions")
+    provider = CloudflareProvider(cfg, allowed_models=["openai/gpt-6-luna", " fireworks/glm-5.3 "])
+    assert provider._request_headers(_ctx())["cf-aig-allowed-models"] == "openai/gpt-6-luna,fireworks/glm-5.3"
+    # an explicit empty pool = the gateway's default pool, even with the env var set
+    assert "cf-aig-allowed-models" not in CloudflareProvider(cfg, allowed_models=[])._request_headers(_ctx())
+    # no condition pool -> the env fallback
+    assert CloudflareProvider(cfg)._request_headers(_ctx())["cf-aig-allowed-models"] == "anthropic/*"
+
+
+def test_system_and_tool_messages_are_plain_strings_without_cache_marks():
+    body = {
+        "system": [{"type": "text", "text": "A", "cache_control": {"type": "ephemeral"}},
+                   {"type": "text", "text": "B"}],
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]},
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "f", "input": {"x": 1}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "out",
+                                          "cache_control": {"type": "ephemeral"}}]},
+        ],
+        "max_tokens": 10,
+    }
+    req = CloudflareProvider.to_openai_request(body, "cloudflare/auto", _ctx(), model_name="cloudflare-auto")
+    msgs = req["messages"]
+    assert msgs[0] == {"role": "system", "content": "A\n\nB"}       # same join as the no-cache path
+    assert isinstance(msgs[1]["content"], list) and msgs[1]["content"][0]["text"] == "hi"
+    assert msgs[2]["tool_calls"][0]["id"] == "t1"
+    tool = next(m for m in msgs if m["role"] == "tool")
+    assert tool["content"] == "out" and tool["tool_call_id"] == "t1"
+    assert "cache_control" not in json.dumps(req)
 
 
 def test_request_body_drops_openrouter_only_fields():

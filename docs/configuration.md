@@ -49,6 +49,10 @@ an object:
 - `effort_routing` (bool, default `false`) — let the router pick this model's
   reasoning effort from the classifier's per-effort heads; see
   [effort routing](#effort-routing)
+- `allowed_models` (list, optional; benchmark-only `cloudflare-auto`) — the candidate
+  pool Cloudflare's Auto Router may pick from for this condition, as `provider/model`
+  ids (`"anthropic/*"` wildcards within a provider), sent as `cf-aig-allowed-models`.
+  Omit for the gateway's default pool (or the `CLOUDFLARE_ALLOWED_MODELS` fallback)
 
 ```json
 "claude-haiku-4.5": { "enabled": true, "provider": "openrouter" }

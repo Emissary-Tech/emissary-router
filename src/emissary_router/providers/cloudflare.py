@@ -19,11 +19,26 @@ the gateway's conventions differ:
   ``cf-aig-routed-model`` (e.g. ``anthropic/claude-sonnet-5``), with
   ``cf-aig-routing-reason`` saying why. Both land in telemetry's raw_event
   (``routed_model`` / ``routing_reason``) for the bench pick tables.
-- there is no billed-cost field; the bench ledger prices calls per routed model.
+- there is no billed-cost field, and the compat ``usage`` is NOT enough to price a
+  call: for Anthropic-served calls ``prompt_tokens`` is only the uncached remainder
+  (measured 2026-10-14: 2 tokens for a 14,548-token prompt, cache write/read split
+  absent), and OpenAI-served calls hide ``cached_tokens``. The gateway's own log
+  (``GET /accounts/{acct}/ai-gateway/gateways/{gw}/logs``) has an exact per-request
+  ``cost`` (reconstructs to the cent: cache write 1.25x, read 0.1x), so the request
+  is tagged for that join: ``cf-aig-metadata`` carries our request id + session (the
+  log's filterable ``metadata``) and the response's ``cf-aig-request-id`` (= the
+  log's ``event_id`` filter key) is kept as ``gateway_request_id`` in raw_event.
+- the gateway applies its own Anthropic cache breakpoint at the end of the prompt:
+  an appended turn reads the whole previous prompt (measured $0.0030 vs $0.0375
+  fresh), a replaced last message misses entirely. Explicit ``cache_control`` marks
+  therefore carry nothing here and are stripped; and a system or tool message must
+  be a plain string — a content-part array is dropped on the floor (measured: the
+  model answered without its system prompt, 24 input tokens billed).
 - the gateway's own response cache is bypassed per request (``cf-aig-skip-cache``):
   a benchmark must measure model calls, never a replayed answer.
-- optional ``CLOUDFLARE_ALLOWED_MODELS`` (comma-separated ``provider/model``) restricts
-  the pool via ``cf-aig-allowed-models``.
+- the pool is restricted via ``cf-aig-allowed-models`` from the condition
+  (``ModelEntry.allowed_models``, so each benchmark condition names its own pool),
+  else from ``CLOUDFLARE_ALLOWED_MODELS`` (comma-separated ``provider/model``).
 
 Thinking/effort is never forwarded (THINKING_CAPABILITIES marks the entry
 ``no_reasoning_surface``): the Auto Router does not support thinking controls yet
@@ -31,6 +46,7 @@ Thinking/effort is never forwarded (THINKING_CAPABILITIES marks the entry
 """
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
@@ -60,12 +76,13 @@ def gateway_url(account_id: str | None = None, gateway_id: str | None = None) ->
 class CloudflareProvider(OpenRouterProvider):
     name = "cloudflare"
 
-    def __init__(self, config: ProviderConfig):
+    def __init__(self, config: ProviderConfig, allowed_models: list[str] | None = None):
         if not config.base_url:
             config = config.model_copy(update={"base_url": gateway_url()})
         super().__init__(config)
-        allowed = os.environ.get(ALLOWED_MODELS_ENV, "")
-        self._allowed_models = ",".join(m.strip() for m in allowed.split(",") if m.strip())
+        # the condition's pool (ModelEntry.allowed_models) wins; the env var is the fallback
+        pool = allowed_models if allowed_models is not None else os.environ.get(ALLOWED_MODELS_ENV, "").split(",")
+        self._allowed_models = ",".join(m.strip() for m in pool if m and m.strip())
 
     def _request_headers(self, context: RequestContext) -> dict[str, str]:
         headers = {"Content-Type": "application/json", "cf-aig-skip-cache": "true"}
@@ -75,6 +92,12 @@ class CloudflareProvider(OpenRouterProvider):
             headers["cf-aig-session-id"] = context.conversation_id[:256]
         if self._allowed_models:
             headers["cf-aig-allowed-models"] = self._allowed_models
+        # lands in the gateway log's `metadata` (filterable by key/value): the join
+        # between our telemetry row and Cloudflare's own `cost` for the same call
+        meta = {k: v for k, v in (("request_id", context.request_id),
+                                  ("session", context.conversation_id)) if v}
+        if meta:
+            headers["cf-aig-metadata"] = json.dumps(meta, separators=(",", ":"))
         return headers
 
     def _metadata_from_headers(self, headers: Any) -> dict[str, Any]:
@@ -101,7 +124,28 @@ class CloudflareProvider(OpenRouterProvider):
     ) -> dict[str, Any]:
         request = super().to_openai_request(body, model_id, context, model_name)
         # OpenRouter-only body fields: session stickiness travels as a header here,
-        # and usage accounting is always on at the gateway (no `usage` toggle).
+        # usage accounting is always on at the gateway (no `usage` toggle), and the
+        # top-level cache hint is meaningless (the gateway places its own breakpoint).
         request.pop("session_id", None)
         request.pop("usage", None)
+        request.pop("cache_control", None)
+        request["messages"] = [cls._gateway_message(m) for m in request.get("messages") or []]
         return request
+
+    @staticmethod
+    def _gateway_message(message: dict[str, Any]) -> dict[str, Any]:
+        """System and tool messages as plain strings, cache marks off the parts that
+        stay parts (see the module docstring for the measurements behind both)."""
+        content = message.get("content")
+        if not isinstance(content, list):
+            return message
+        if message.get("role") in ("system", "tool"):
+            text = "\n\n".join(
+                (p.get("text") or "") if isinstance(p, dict) else str(p) for p in content
+            )
+            return {**message, "content": text}
+        parts = [
+            {k: v for k, v in p.items() if k != "cache_control"} if isinstance(p, dict) else p
+            for p in content
+        ]
+        return {**message, "content": parts}

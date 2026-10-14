@@ -10,7 +10,9 @@ from emissary_router.providers.openrouter import OpenRouterProvider
 from emissary_router.providers.zai import ZaiProvider
 
 
-def build_provider(name: str, config: ProviderConfig) -> Provider:
+def build_provider(name: str, config: ProviderConfig, **options) -> Provider:
+    """`options` are per-provider settings taken from the model entries that resolve
+    to this provider (today: cloudflare's `allowed_models`)."""
     provider_type = config.type or name
     if provider_type == "anthropic":
         return AnthropicProvider(config)
@@ -23,5 +25,5 @@ def build_provider(name: str, config: ProviderConfig) -> Provider:
     if provider_type == "zai":
         return ZaiProvider(config)
     if provider_type == "cloudflare":
-        return CloudflareProvider(config)
+        return CloudflareProvider(config, allowed_models=options.get("allowed_models"))
     raise ValueError(f"unsupported provider {name}: {provider_type}")

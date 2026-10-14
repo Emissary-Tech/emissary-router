@@ -184,6 +184,11 @@ class ModelEntry(BaseModel):
     # is read at the head for that effort. Inert with a plain-label classifier.
     # Same semantics as the platform gateway's `effort_routing_enabled`.
     effort_routing: bool = False
+    # Competitor dynamic routers only (cloudflare-auto): restrict the router's own
+    # candidate pool for this condition (Cloudflare `cf-aig-allowed-models`, e.g.
+    # ["anthropic/*", "openai/gpt-6-luna"]). None = the router's default pool
+    # (or the CLOUDFLARE_ALLOWED_MODELS env fallback). Ignored by other providers.
+    allowed_models: list[str] | None = None
 
 
 class RouterConfig(BaseModel):

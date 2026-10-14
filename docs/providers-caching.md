@@ -37,21 +37,39 @@ single-model condition (the classifier has no head for it). It speaks the
 chat-completions wire format at
 `https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/compat/chat/completions`,
 so the request/response translation is the OpenRouter provider's; the gateway's own
-conventions differ in four places, all handled in `providers/cloudflare.py`:
+conventions differ in these places, all handled in `providers/cloudflare.py`:
 
 - auth is `cf-aig-authorization: Bearer $CLOUDFLARE_API_TOKEN`; model keys are the
-  ones stored in the gateway or Cloudflare's unified billing;
+  ones stored in the gateway or Cloudflare's unified billing (Auto Router needs the
+  latter: no credits, 402);
 - the client's session id goes out as `cf-aig-session-id` — Auto Router keeps one
-  model per turn only when it sees it, which is what lets prompt caching work;
+  model per turn only when it sees it;
+- the candidate pool is the condition's `allowed_models` (`cf-aig-allowed-models`),
+  else `CLOUDFLARE_ALLOWED_MODELS`, else the gateway's default pool;
 - the served model comes back in response headers (`cf-aig-routed-model`,
   `cf-aig-routing-reason`), recorded in telemetry's `raw_event` as `routed_model` /
-  `routing_reason`; there is no billed-cost field, so the bench ledger prices calls
-  per routed model;
+  `routing_reason`, with `cf-aig-request-id` as `gateway_request_id`;
+- **the compat `usage` cannot price a call.** Measured 2026-10-14: for Anthropic-served
+  calls `prompt_tokens` is only the uncached remainder (2 tokens for a 14,548-token
+  prompt; no cache write/read split), and OpenAI-served calls hide `cached_tokens`.
+  Cloudflare's own per-request log (`GET /accounts/{acct}/ai-gateway/gateways/{gw}/logs`,
+  token with AI Gateway Read) carries an exact `cost` (reconstructs to the cent:
+  cache write 1.25x, read 0.1x) and the full split in `usage_metadata`
+  (`input_tokens`, `input_cached_tokens`, `input_cache_creation_tokens`,
+  `output_tokens`, `neurons` for Workers AI). The request is tagged for that join:
+  `cf-aig-metadata` carries `{"request_id", "session"}` (the log's filterable
+  `metadata`; the `event_id` filter does not match the response header). The bench
+  ledger pulls those rows after a run (`er-bench cf-costs`);
+- the gateway places its own Anthropic cache breakpoint at the end of the prompt
+  (an appended turn reads the whole previous prompt: $0.0030 vs $0.0375 fresh; a
+  replaced last message misses entirely), so ER's explicit `cache_control` marks are
+  stripped, and a system or tool message is sent as a plain string — the gateway drops
+  a content-part array on the floor (measured: the model answered without its system
+  prompt, 24 input tokens billed);
 - the gateway's response cache is bypassed per request (`cf-aig-skip-cache`).
 
-Thinking/effort is never forwarded: Auto Router does not support thinking controls
-yet, so the chosen model runs at its own defaults. `CLOUDFLARE_ALLOWED_MODELS`
-(comma-separated `provider/model`, `*` allowed within a provider) restricts the pool.
+Thinking/effort is never forwarded: Auto Router ignores `reasoning_effort` (measured:
+no direction between low and high), so the chosen model runs at its own defaults.
 
 ## Gemini: OpenRouter by default, Google native opt-in
 

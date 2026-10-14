@@ -59,17 +59,23 @@ class RouterPipeline:
         return self._cache_ledger
 
     def _build_providers(self):
-        provider_names = {
-            self._config.resolve_model(model_name).provider
-            for model_name in self._config.enabled_models()
-        }
-        return {
-            name: build_provider(
+        by_provider: dict[str, list[str]] = {}
+        for model_name in self._config.enabled_models():
+            by_provider.setdefault(self._config.resolve_model(model_name).provider, []).append(model_name)
+        providers = {}
+        for name, models in by_provider.items():
+            options: dict = {}
+            # a dynamic competitor router's candidate pool is a per-condition setting
+            pools = [self._config.models[m].allowed_models for m in models
+                     if self._config.models[m].allowed_models is not None]
+            if pools:
+                options["allowed_models"] = pools[0]
+            providers[name] = build_provider(
                 name,
                 ProviderConfig(type=name, api_key=os.environ.get(PROVIDER_ENV[name])),
+                **options,
             )
-            for name in provider_names
-        }
+        return providers
 
     async def handle_messages(self, body: dict, headers: dict[str, str]) -> Response:
         request_id = str(uuid.uuid4())
