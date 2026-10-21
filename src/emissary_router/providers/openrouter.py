@@ -14,12 +14,13 @@ from emissary_router.config import ProviderConfig, ResolvedModel
 from emissary_router.schemas import AnthropicRequest, RequestContext
 from emissary_router.providers.base import ProviderComplete, sanitize_tool_id, strip_cch_text
 from emissary_router.providers.base import last_cache_control
+from emissary_router.catalog import CATALOG
 from emissary_router.providers.thinking import (
     SYNTHETIC_THINKING_SIGNATURE,
     accepts_effort_for_model,
-    can_disable_thinking_for_model,
     extract_reasoning_settings,
     resolve_effort_for_model,
+    thinking_off_effort_for_model,
     thinking_budget_from_max_tokens,
     translates_reasoning_for_model,
 )
@@ -557,6 +558,12 @@ class OpenRouterProvider:
         if context and context.conversation_id:
             request["session_id"] = context.conversation_id[:256]
 
+        spec = CATALOG.get(model_name) if model_name else None
+        if spec is not None and spec.openrouter_provider_order:
+            # host preference, fallbacks allowed (catalog.py: deepseek-v4.1-flash-1017
+            # effort labels were made on Fireworks)
+            request["provider"] = {"order": list(spec.openrouter_provider_order)}
+
         if model_id in DYNAMIC_ROUTER_MODELS:
             # surface the routed model + real credit cost for bench telemetry
             request["usage"] = {"include": True}
@@ -781,11 +788,13 @@ class OpenRouterProvider:
         settings = extract_reasoning_settings(body)
         reasoning: dict[str, Any] = {}
         if settings.effort == "none":
-            # A model that always reasons (e.g. Kimi) rejects a disable with HTTP 400
-            # ("Reasoning is mandatory ... cannot be disabled"). Omit the field instead
-            # so the request succeeds; the model just reasons by default.
-            if can_disable_thinking_for_model(model_name):
-                reasoning["effort"] = "none"
+            # The model's own "off": none where OpenRouter can disable it, the lowest
+            # rung where reasoning is mandatory there (claude 5.5 / fable-5.1,
+            # glm-5.3, kimi-k2.7: 400 "Reasoning is mandatory ... cannot be disabled"
+            # on none / enabled:false), omitted when the model must not see the field.
+            off = thinking_off_effort_for_model(model_name)
+            if off is not None:
+                reasoning["effort"] = _OPENROUTER_MAX_EFFORT if off == "max" else off
         elif settings.effort is not None and not accepts_effort_for_model(model_name):
             reasoning["max_tokens"] = thinking_budget_from_max_tokens(body)
         elif settings.effort is not None:

@@ -135,15 +135,18 @@ def test_openrouter_kimi_max_effort_maps_to_xhigh() -> None:
     assert "max_tokens" not in req["reasoning"]
 
 
-def test_openrouter_kimi_disabled_thinking_omits_reasoning() -> None:
-    # Kimi always reasons; OpenRouter 400s on effort:none ("Reasoning is mandatory ...
-    # cannot be disabled"). So a disable request must omit reasoning entirely.
+def test_openrouter_kimi_disabled_thinking_runs_at_lowest_effort() -> None:
+    # Kimi K2.7 always reasons; OpenRouter 400s on effort:none ("Reasoning is
+    # mandatory ... cannot be disabled") but takes low (live 2026-10-08). A disable
+    # request is therefore sent at the lowest effort — the same rule the platform
+    # gateway applies (disables_via_lowest_effort) — rather than omitted, so the
+    # model reasons as little as it can instead of at its default.
     req = OpenRouterProvider.to_openai_request(
         {"messages": [], "thinking": {"type": "disabled"}},
         "moonshotai/kimi-k2.7-code",
         model_name="kimi-k2.7-code",
     )
-    assert "reasoning" not in req
+    assert req["reasoning"] == {"effort": "low"}
 
 
 def test_openrouter_disable_thinking_still_sends_none_for_normal_models() -> None:

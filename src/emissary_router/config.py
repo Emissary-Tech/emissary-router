@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from emissary_router.catalog import (
     CATALOG,
     PROVIDER_ENV,
+    CLASSIFIER_KEY_ENV,
     ROUTER_API_KEY_ENV,
     ProviderName,
     cost_score,
@@ -286,8 +287,12 @@ class AppConfig(BaseModel):
 
 
 def missing_runtime_env(config: AppConfig) -> list[str]:
-    required = [ROUTER_API_KEY_ENV, *config.required_provider_env().values()]
-    return [name for name in required if not os.environ.get(name)]
+    missing = [name for name in config.required_provider_env().values() if not os.environ.get(name)]
+    # either classifier key satisfies routing (routing/classifier.py prefers the
+    # dedicated one); the report names the documented variable
+    if not (os.environ.get(CLASSIFIER_KEY_ENV) or os.environ.get(ROUTER_API_KEY_ENV)):
+        missing.insert(0, ROUTER_API_KEY_ENV)
+    return missing
 
 
 def load_config(path: Path | None = None, strict_env: bool = True) -> AppConfig:

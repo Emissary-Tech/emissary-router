@@ -15,9 +15,9 @@ from emissary_router.providers.base import ProviderComplete, sanitize_tool_id, s
 from emissary_router.providers.openrouter import anthropic_error_payload
 from emissary_router.providers.thinking import (
     SYNTHETIC_THINKING_SIGNATURE,
-    can_disable_thinking_for_model,
     extract_reasoning_settings,
     resolve_effort_for_model,
+    thinking_off_effort_for_model,
 )
 
 logger = logging.getLogger(__name__)
@@ -272,9 +272,13 @@ class OpenAIProvider:
         """
         settings = extract_reasoning_settings(body)
         if settings.effort == "none":
-            if can_disable_thinking_for_model(model_name):
-                return {"effort": "none", "summary": "auto"}
-            return None
+            # "off" in the served model's own vocabulary: none where it exists
+            # (gpt-5.6 / gpt-6), the lowest rung where it does not (gpt-6.1-sol and
+            # gpt-6-astra 400 on none), nothing for a model that must not see it.
+            off = thinking_off_effort_for_model(model_name)
+            if off is None:
+                return None
+            return {"effort": off, "summary": "auto"}
         if settings.effort is not None:
             effort = resolve_effort_for_model(settings.effort, model_name)
             if effort not in _RESPONSES_EFFORTS:

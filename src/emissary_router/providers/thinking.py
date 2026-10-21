@@ -9,6 +9,10 @@ from typing import Any
 # above xhigh. OpenRouter's own top remains xhigh — its sender maps max->xhigh.
 EFFORT_ORDER = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 SUPPORTED_THINKING_TYPES = {"enabled", "disabled"}
+# Both read as "thinking off": `disabled` is the usual switch, `between_tools` the one
+# sonnet-5.5 wants (it 400s on `disabled`). The normalizer swaps in the served
+# model's own switch (ModelThinkingCapabilities.thinking_off_type).
+THINKING_OFF_TYPES = {"disabled", "between_tools"}
 DEFAULT_MAX_THINKING_BUDGET = 32000
 # Anthropic rejects thinking.budget_tokens below this (400 "Input should be greater than or
 # equal to 1024"); a budget-model request whose max_tokens cannot fit it runs without thinking.
@@ -42,6 +46,21 @@ class ModelThinkingCapabilities:
     # entries (openrouter-auto) whose downstream host converts reasoning.max_tokens
     # into a hard output reservation and starves the response.
     no_reasoning_surface: bool = False
+    # Claude 5's `thinking.display` knob: a model without it must not see the field.
+    supports_thinking_display: bool = False
+    # No off switch of its own: an off request is served at the model's lowest
+    # effort instead (opus-5.5 / fable-5.1 400 on `disabled`; through OpenRouter
+    # they, glm-5.3 and kimi-k2.7 400 "Reasoning is mandatory" on none / enabled:false).
+    disables_via_lowest_effort: bool = False
+    # The thinking type that turns the model off on the Anthropic path. sonnet-5.5
+    # rejects `disabled` and takes `between_tools` (platform live, 2026-10-01).
+    thinking_off_type: str = "disabled"
+    # The classic `thinking: {type: enabled, budget_tokens}` shape. Every Claude 5
+    # rejects it (400 '"thinking.type.enabled" is not supported for this model. Use
+    # "thinking.type.adaptive" and "output_config.effort"', live 2026-10-22), yet
+    # clients targeting an older Claude still send it. False => the normalizer
+    # rewrites it to adaptive and drops the budget; a client effort still applies.
+    accepts_thinking_budget: bool = True
 
 
 THINKING_CAPABILITIES = {
@@ -69,17 +88,21 @@ THINKING_CAPABILITIES = {
     # glm-5.3 / glm-5.3-flash cannot switch reasoning off on OpenRouter (live
     # 2026-10-08: 400 "Reasoning is mandatory for this endpoint and cannot be
     # disabled" on both effort:none and enabled:false; glm-5.2 still accepts both).
+    # Excluded from explicit thinking-off requests (can_disable False); when one
+    # must still be served (the anchor), none becomes low (live: low -> 200).
     "glm-5.3": ModelThinkingCapabilities(
         accepts_effort_param=True,
         accepts_adaptive_thinking=True,
         max_effort="xhigh",
         can_disable_thinking=False,
+        disables_via_lowest_effort=True,
     ),
     "glm-5.3-flash": ModelThinkingCapabilities(
         accepts_effort_param=True,
         accepts_adaptive_thinking=True,
         max_effort="xhigh",
         can_disable_thinking=False,
+        disables_via_lowest_effort=True,
     ),
     # OpenRouter: Kimi K2.7 Code reasons via the effort param (OpenRouter maps the level
     # to a reasoning budget; xhigh ~= 95% of max_tokens). It always reasons — thinking
@@ -91,40 +114,80 @@ THINKING_CAPABILITIES = {
         accepts_adaptive_thinking=False,
         max_effort="xhigh",
         can_disable_thinking=False,
+        disables_via_lowest_effort=True,
     ),
     # claude-5 series: adaptive thinking IS the provider default (omitting `thinking`
     # runs adaptive) and effort is a separate knob defaulting to high. Full ladder
     # low/medium/high (default) /xhigh/max. NOTE: with thinking DISABLED, effort is
     # capped at high (xhigh/max + disabled -> 400) — the anthropic normalizer
     # enforces that cap.
+    # Every Claude 5 rejects the budgeted `enabled` shape (accepts_thinking_budget
+    # False -> rewritten to adaptive) and has the `display` knob.
     "claude-sonnet-5": ModelThinkingCapabilities(
         accepts_effort_param=True,
         accepts_adaptive_thinking=True,
+        accepts_thinking_budget=False,
         max_effort="max",
         supported_efforts=("low", "medium", "high", "xhigh", "max"),
+        supports_thinking_display=True,
     ),
     "claude-opus-5": ModelThinkingCapabilities(
         accepts_effort_param=True,
         accepts_adaptive_thinking=True,
+        accepts_thinking_budget=False,
         max_effort="max",
         supported_efforts=("low", "medium", "high", "xhigh", "max"),
+        supports_thinking_display=True,
     ),
-    # opus-5.5 / sonnet-5.5: same ladder as opus-5; thinking has no plain off switch
-    # (opus-5.5 400s on `disabled`, sonnet-5.5 wants `between_tools`) — the anthropic
-    # path serves an off request at the lowest effort instead (platform live, 2026-09).
+    # opus-5.5: same ladder as opus-5, but no off switch at all (`disabled` 400s;
+    # OpenRouter 400s "Reasoning is mandatory" on none) — an off request is served
+    # at the lowest effort. It stays a candidate for thinking-off requests, so an
+    # opus-5.5 anchor can always serve (platform live, 2026-10-01).
     "claude-opus-5.5": ModelThinkingCapabilities(
         accepts_effort_param=True,
         accepts_adaptive_thinking=True,
+        accepts_thinking_budget=False,
         max_effort="max",
         supported_efforts=("low", "medium", "high", "xhigh", "max"),
-        can_disable_thinking=False,
+        supports_thinking_display=True,
+        disables_via_lowest_effort=True,
     ),
+    # sonnet-5.5: its own off switch is `thinking.type: between_tools` (`disabled`
+    # 400s; a real off, tool use unaffected — platform live, 2026-10-01). OpenRouter
+    # cannot express it, so that path serves an off request at the lowest effort.
     "claude-sonnet-5.5": ModelThinkingCapabilities(
         accepts_effort_param=True,
         accepts_adaptive_thinking=True,
+        accepts_thinking_budget=False,
         max_effort="max",
         supported_efforts=("low", "medium", "high", "xhigh", "max"),
-        can_disable_thinking=False,
+        supports_thinking_display=True,
+        thinking_off_type="between_tools",
+    ),
+    # haiku-5.5 (live 2026-10-22): the Claude 5 ladder and display knob, the plain
+    # `disabled` switch works (between_tools and enabled+budget 400), effort none /
+    # minimal 400, default effort medium. OpenRouter turns it off on none too.
+    "claude-haiku-5.5": ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=True,
+        accepts_thinking_budget=False,
+        max_effort="max",
+        supported_efforts=("low", "medium", "high", "xhigh", "max"),
+        supports_thinking_display=True,
+    ),
+    # fable-5.1 (live 2026-10-22): adaptive is the ONLY thinking type (enabled,
+    # disabled and between_tools all 400 "use adaptive and output_config.effort"),
+    # so like opus-5.5 an off request is served at the lowest effort; OpenRouter
+    # 400s "Reasoning is mandatory" on none / enabled:false as well. Default effort
+    # high; easy turns get no thinking block even at max.
+    "claude-fable-5.1": ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=True,
+        accepts_thinking_budget=False,
+        max_effort="max",
+        supported_efforts=("low", "medium", "high", "xhigh", "max"),
+        supports_thinking_display=True,
+        disables_via_lowest_effort=True,
     ),
     # DeepSeek V4 Flash (OpenRouter): hybrid thinking — reasons via OpenRouter's
     # effort->budget translation and accepts a disable (non-thinking mode).
@@ -142,6 +205,14 @@ THINKING_CAPABILITIES = {
     # Same controls as v4-flash (live: effort moves reasoning, none turns it off;
     # reasoning.max_tokens is ignored).
     "deepseek-v4.1-flash": ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=False,
+        max_effort="xhigh",
+    ),
+    # 2026-10-17 refresh, same controls (live 2026-10-22 on InferenceNet, Wafer and
+    # Fireworks): every effort rung accepted, none / enabled:false turn reasoning
+    # off (0 tokens), reasoning.max_tokens accepted, forced tool_choice fine.
+    "deepseek-v4.1-flash-1017": ModelThinkingCapabilities(
         accepts_effort_param=True,
         accepts_adaptive_thinking=False,
         max_effort="xhigh",
@@ -182,6 +253,16 @@ THINKING_CAPABILITIES = {
     # gpt-6.1-sol drops "none" from the vocabulary (live: 400 "Supported values
     # are: low, medium, high, xhigh, and max"), so a disable snaps to low.
     "gpt-6.1-sol": ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=False,
+        max_effort="max",
+        supported_efforts=("low", "medium", "high", "xhigh", "max"),
+    ),
+    # gpt-6-astra (live 2026-10-22): same vocabulary as gpt-6.1-sol — none and
+    # minimal 400 ("Supported values are: low, medium, high, xhigh, and max"),
+    # default medium, low answers easy turns with 0 reasoning tokens; temperature /
+    # top_p 400 like the rest of the gpt-5.x/6 series (never forwarded).
+    "gpt-6-astra": ModelThinkingCapabilities(
         accepts_effort_param=True,
         accepts_adaptive_thinking=False,
         max_effort="max",
@@ -229,10 +310,15 @@ if os.environ.get("EMISSARY_ROUTER_BENCH_EXTRAS"):
 
 
 # claude-5 models reject client sampling params (opus-5: any temperature/top_p;
-# sonnet-5: non-default values) — measured during the 2026-07-31 label runs. Dropping
-# the keys entirely is intent-preserving: the provider default takes over, which is
-# what Claude Code's temperature=1 means anyway.
-REJECTS_SAMPLING_PARAMS = {"claude-sonnet-5", "claude-opus-5", "claude-opus-5.5", "claude-sonnet-5.5"}
+# sonnet-5: non-default values) — measured during the 2026-07-31 label runs; opus-5.5
+# and sonnet-5.5 400 on temperature other than 1 and on any top_p/top_k ("deprecated
+# for this model"); haiku-5.5 and fable-5.1 400 on either key alone (live 2026-10-22,
+# same wording). Dropping the keys entirely is intent-preserving: the provider
+# default takes over, which is what Claude Code's temperature=1 means anyway.
+REJECTS_SAMPLING_PARAMS = {
+    "claude-sonnet-5", "claude-opus-5", "claude-opus-5.5", "claude-sonnet-5.5",
+    "claude-haiku-5.5", "claude-fable-5.1",
+}
 
 
 def strip_unsupported_sampling_params(body: dict[str, Any], served_model: str) -> list[str]:
@@ -339,6 +425,32 @@ def accepts_effort_for_model(model_name: str, default: bool = True) -> bool:
     return capabilities.accepts_effort_param if capabilities else default
 
 
+def thinking_off_effort_for_model(model_name: str) -> str | None:
+    """What a thinking-off request becomes on an effort-shaped surface (OpenRouter
+    and OpenAI Responses `reasoning.effort`): "none" where the model can switch
+    reasoning off there, its lowest rung where it cannot — no off switch of its own
+    (opus-5.5, fable-5.1, glm-5.3, kimi-k2.7), a switch OpenRouter cannot express
+    (sonnet-5.5's between_tools), or an effort-only vocabulary without "none"
+    (gpt-6.1-sol, gpt-6-astra: 400 "Reasoning is mandatory" through OpenRouter) —
+    and None when the field must be omitted. Claude models with a real switch keep
+    "none": OpenRouter turns it into their disable (haiku-5.5 live: 200, 0 reasoning
+    tokens)."""
+    capabilities = THINKING_CAPABILITIES.get(model_name)
+    if capabilities is None:
+        return "none"
+    if capabilities.disables_via_lowest_effort or capabilities.thinking_off_type != "disabled":
+        return (capabilities.supported_efforts or ("low",))[0]
+    if not capabilities.can_disable_thinking:
+        return None
+    if (
+        not capabilities.accepts_adaptive_thinking
+        and capabilities.supported_efforts
+        and "none" not in capabilities.supported_efforts
+    ):
+        return capabilities.supported_efforts[0]
+    return "none"
+
+
 def translates_reasoning_for_model(model_name: str) -> bool:
     """False when the capability entry opts out of reasoning entirely
     (no_reasoning_surface) — senders forward NO reasoning field, never a budget
@@ -375,8 +487,53 @@ def normalize_anthropic_thinking_for_model(
 
     changes: list[str] = []
     thinking_field = body.get("thinking")
+    if isinstance(thinking_field, dict) and thinking_field.get("type") in THINKING_OFF_TYPES:
+        original_type = thinking_field["type"]
+        if capabilities.disables_via_lowest_effort and capabilities.accepts_adaptive_thinking:
+            # No off switch (opus-5.5, fable-5.1): keep the intent as far as the model
+            # allows — adaptive at its lowest effort, whatever effort the client named.
+            lowest = (capabilities.supported_efforts or ("low",))[0]
+            output_config = body.get("output_config")
+            if not isinstance(output_config, dict):
+                output_config = {}
+                body["output_config"] = output_config
+            previous = output_config.get("effort")
+            output_config["effort"] = lowest
+            body["thinking"] = {"type": "adaptive"}
+            changes.append(
+                f"thinking={original_type}->adaptive+effort={lowest}"
+                f"(no off switch; client effort {previous})"
+            )
+        elif original_type != capabilities.thinking_off_type:
+            # The model's own switch (sonnet-5.5 takes between_tools, the rest disabled).
+            body["thinking"] = {"type": capabilities.thinking_off_type}
+            changes.append(f"thinking={original_type}->{capabilities.thinking_off_type}")
+        thinking_field = body["thinking"]
+    elif (
+        isinstance(thinking_field, dict)
+        and thinking_field.get("type") == "enabled"
+        and not capabilities.accepts_thinking_budget
+        and capabilities.accepts_adaptive_thinking
+    ):
+        # The classic budgeted shape on a model that only knows adaptive: keep the
+        # intent (thinking on), drop the budget — adaptive has no slot for it and
+        # mapping tokens onto effort rungs would be invented. A client effort
+        # (output_config.effort) still applies below; otherwise the model default.
+        budget = thinking_field.get("budget_tokens")
+        body["thinking"] = {"type": "adaptive"}
+        changes.append(f"thinking=enabled(budget={budget})->adaptive")
+        thinking_field = body["thinking"]
+    if (
+        isinstance(thinking_field, dict)
+        and "display" in thinking_field
+        and not capabilities.supports_thinking_display
+    ):
+        # `display` is a Claude 5 knob; models without it (older Claude, z.ai GLM on
+        # the Anthropic-compatible path) must not see the field.
+        display = thinking_field.pop("display")
+        changes.append(f"thinking.display={display} dropped")
     thinking_disabled = (
-        isinstance(thinking_field, dict) and thinking_field.get("type") == "disabled"
+        isinstance(thinking_field, dict) and thinking_field.get("type") in THINKING_OFF_TYPES
     )
 
     def walk(value: Any, path: str = "") -> None:

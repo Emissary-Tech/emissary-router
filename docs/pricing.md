@@ -10,9 +10,10 @@ Prices are USD per 1M tokens.
 |---|---|---|---|---|
 | `deepseek-v4-flash` / `-0731` | 0.14 | 0.28 | 0.028 | 0.14 |
 | `gpt-6-luna` | 0.10 | 0.50 | 0.01 | 0.125 |
+| `claude-haiku-5.5` (≤100K prompt tier) | 0.10 | 0.50 | 0.01 | 0.125 |
 | `qwen3.8-omni-flash` | 0.15 | 0.47 | 0.016 | 0.15 |
 | `qwen3.8-flash` | 0.15 | 0.47 | 0.016 | 0.20 |
-| `deepseek-v4.1-flash` | 0.15 | 0.60 | 0.003 | 0.15 |
+| `deepseek-v4.1-flash` / `-1017` | 0.15 | 0.60 | 0.003 | 0.15 |
 | `gpt-5.6-luna` | 0.20 | 1.20 | 0.02 | 0.25 |
 | `gemini-3.1-flash-lite` | 0.25 | 1.50 | 0.025 | 0.25 |
 | `kimi-k2.7-code` | 0.95 | 4.00 | 0.19 | 0.95 |
@@ -28,9 +29,11 @@ Prices are USD per 1M tokens.
 | `gpt-5.6-sol` | 4.00 | 20.00 | 0.40 | 5.00 |
 | `claude-opus-5.5` | 4.00 | 20.00 | 0.20 | 5.00 |
 | `claude-opus-5` | 5.00 | 25.00 | 0.50 | 6.25 |
+| `gpt-6-astra` | 10.00 | 50.00 | 1.00 | 12.50 |
+| `claude-fable-5.1` | 10.00 | 50.00 | 0.25 | 12.50 |
 
 These are the platform gateway's catalog prices (emissary-ai `routing_gateway/catalog.py`,
-2026-10-08), kept in step so a benchmark condition here prices a call exactly as the
+2026-10-22), kept in step so a benchmark condition here prices a call exactly as the
 platform would. First-party prices (Anthropic, OpenAI) are list prices; OpenRouter-served
 open models are priced at the first party's own sheet rather than OpenRouter's floating
 per-host rates.

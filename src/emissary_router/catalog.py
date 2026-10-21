@@ -27,6 +27,11 @@ class ModelSpec:
     # Routing's context guard excludes a model whose window the request already exceeds;
     # None (unknown) never excludes.
     context_window: int | None = None
+    # OpenRouter host preference (`provider.order`) for a model whose behaviour
+    # differs by host: deepseek-v4.1-flash-1017's effort labels were produced on
+    # Fireworks, and OpenRouter's other hosts accept the effort field without all
+    # honoring it. Fallbacks stay allowed, so an unavailable host never fails a call.
+    openrouter_provider_order: tuple[str, ...] | None = None
 
 
 def cost_score(spec: ModelSpec) -> float:
@@ -48,7 +53,7 @@ def _price(input: float, output: float, cache_read: float, cache_write: float) -
 
 
 # The model set, upstream ids and prices mirror the platform gateway's catalog
-# (emissary-ai app/services/routing_gateway/catalog.py, 2026-10-08) so a benchmark
+# (emissary-ai app/services/routing_gateway/catalog.py, 2026-10-22) so a benchmark
 # condition here prices a call exactly as the platform would. Keep the two in step:
 # a price edit there is a price edit here. Listed cheap -> expensive for readability
 # only; routing derives order via cost_score.
@@ -78,6 +83,14 @@ CATALOG: dict[str, ModelSpec] = {
         pricing=_price(0.10, 0.50, 0.01, 0.125),
         context_window=1_050_000,
     ),
+    # Prices are the <=100K-token prompt tier (above it Anthropic bills 0.50/2.50).
+    "claude-haiku-5.5": ModelSpec(
+        name="claude-haiku-5.5",
+        providers={"anthropic": "claude-haiku-5-5", "openrouter": "anthropic/claude-haiku-5.5"},
+        default_provider="anthropic",
+        pricing=_price(0.10, 0.50, 0.01, 0.125),
+        context_window=1_000_000,
+    ),
     "qwen3.8-omni-flash": ModelSpec(
         name="qwen3.8-omni-flash",
         providers={"openrouter": "qwen/qwen3.8-omni-flash"},
@@ -99,6 +112,15 @@ CATALOG: dict[str, ModelSpec] = {
         default_provider="openrouter",
         pricing=_price(0.15, 0.60, 0.003, 0.15),
         context_window=1_048_576,
+    ),
+    # 2026-10-17 refresh of v4.1-flash with its own (per-effort) classifier heads.
+    "deepseek-v4.1-flash-1017": ModelSpec(
+        name="deepseek-v4.1-flash-1017",
+        providers={"openrouter": "deepseek/deepseek-v4.1-flash-1017"},
+        default_provider="openrouter",
+        pricing=_price(0.15, 0.60, 0.003, 0.15),
+        context_window=1_048_576,
+        openrouter_provider_order=("fireworks",),
     ),
     "gpt-5.6-luna": ModelSpec(
         name="gpt-5.6-luna",
@@ -219,6 +241,23 @@ CATALOG: dict[str, ModelSpec] = {
         pricing=_price(5.00, 25.00, 0.50, 6.25),
         context_window=1_000_000,
     ),
+    "gpt-6-astra": ModelSpec(
+        name="gpt-6-astra",
+        providers={"openai": "gpt-6-astra", "openrouter": "openai/gpt-6-astra"},
+        default_provider="openai",
+        pricing=_price(10.00, 50.00, 1.00, 12.50),
+        context_window=1_050_000,
+    ),
+    # Mythos-class tier; cache reads at 2.5% of input (Anthropic cut them for 5.1).
+    # No thinking-off switch and no forced tool_choice (both 400 — providers/thinking.py,
+    # tool_choice.py); Anthropic requires 30-day data retention on the account.
+    "claude-fable-5.1": ModelSpec(
+        name="claude-fable-5.1",
+        providers={"anthropic": "claude-fable-5-1", "openrouter": "anthropic/claude-fable-5.1"},
+        default_provider="anthropic",
+        pricing=_price(10.00, 50.00, 0.25, 12.50),
+        context_window=1_000_000,
+    ),
 }
 
 
@@ -234,6 +273,9 @@ PROVIDER_ENV: dict[ProviderName, str] = {
 }
 
 ROUTER_API_KEY_ENV = "EMISSARY_ROUTER_API_KEY"
+# A key dedicated to the classification endpoint. When set it is sent instead of
+# ROUTER_API_KEY_ENV, which can then stay reserved for the platform router itself.
+CLASSIFIER_KEY_ENV = "EMISSARY_CLASSIFIER_KEY"
 
 # Benchmark-only competitor routers, gated behind an env var so they can never leak
 # into production rosters (a zero-priced entry would sort "cheapest" and pollute any

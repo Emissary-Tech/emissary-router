@@ -71,11 +71,15 @@ def test_glm_and_kimi_are_selectable_in_config() -> None:
 def test_catalog_contains_supported_models() -> None:
     # Catalog insertion order is cosmetic: routing derives order from cost_score
     # (see test_routing_order_is_by_price_not_dict_order), so assert membership, not order.
-    # The set mirrors the platform gateway catalog (emissary-ai catalog.py, 2026-10-08).
+    # The set mirrors the platform gateway catalog (emissary-ai catalog.py, 2026-10-22).
     assert set(CATALOG) == {
         "deepseek-v4-flash",
         "deepseek-v4-flash-0731",  # snapshot-named alias (same pricing)
         "deepseek-v4.1-flash",
+        "deepseek-v4.1-flash-1017",  # 2026-10-17 refresh with its own effort heads
+        "claude-haiku-5.5",
+        "gpt-6-astra",
+        "claude-fable-5.1",
         "gpt-6-luna",
         "qwen3.8-omni-flash",
         "qwen3.8-flash",
@@ -120,14 +124,16 @@ def test_routing_order_is_by_price_not_dict_order(monkeypatch: pytest.MonkeyPatc
 
     config = _config(models={name: True for name in reordered})
     assert config.enabled_models() == [
-        # (cost_score, name) order at platform prices, 2026-10-08
+        # (cost_score, name) order at platform prices, 2026-10-22
         "deepseek-v4-flash",        # 0.42
         "deepseek-v4-flash-0731",   # 0.42 (name tie-break)
+        "claude-haiku-5.5",         # 0.60 (name tie-break with gpt-6-luna)
         "gpt-6-luna",               # 0.60
         "qwen3.8-flash",            # 0.62
         "qwen3.8-omni-flash",       # 0.62 (name tie-break)
         "glm-5.3-flash",            # 0.65
         "deepseek-v4.1-flash",      # 0.75
+        "deepseek-v4.1-flash-1017",  # 0.75 (name tie-break)
         "gpt-5.6-luna",             # 1.40
         "gemini-3.1-flash-lite",    # 1.75
         "kimi-k2.7-code",           # 4.95
@@ -143,6 +149,8 @@ def test_routing_order_is_by_price_not_dict_order(monkeypatch: pytest.MonkeyPatc
         "claude-opus-5.5",          # 24.0
         "gpt-5.6-sol",              # 24.0
         "claude-opus-5",            # 30.0
+        "claude-fable-5.1",         # 60.0 (name tie-break with gpt-6-astra)
+        "gpt-6-astra",              # 60.0
     ]
 
 

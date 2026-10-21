@@ -93,13 +93,16 @@ Built-in models — the same set, upstream ids and prices as the Emissary platfo
 gateway's catalog (see [pricing](docs/pricing.md) for the table):
 
 - Anthropic (or OpenRouter): `claude-opus-5`, `claude-opus-5.5`, `claude-sonnet-5`,
-  `claude-sonnet-5.5`, `claude-haiku-4.5` — adaptive thinking is the claude-5 default;
-  the router strips client `temperature`/`top_p`, which the claude-5 series rejects.
+  `claude-sonnet-5.5`, `claude-haiku-4.5`, `claude-haiku-5.5`, `claude-fable-5.1` —
+  adaptive thinking is the claude-5 default; the router strips client
+  `temperature`/`top_p`, which the claude-5 series rejects, and re-maps thinking
+  switches the served model lacks (see [thinking](docs/thinking.md)).
 - OpenAI (native Responses API, or OpenRouter): `gpt-5.6-luna`, `gpt-5.6-terra`,
-  `gpt-5.6-sol`, `gpt-6-luna`, `gpt-6-sol`, `gpt-6.1-sol`.
+  `gpt-5.6-sol`, `gpt-6-luna`, `gpt-6-sol`, `gpt-6.1-sol`, `gpt-6-astra`.
 - OpenRouter: `deepseek-v4-flash` (and its `-0731` snapshot alias),
-  `deepseek-v4.1-flash`, `qwen3.8-flash`, `qwen3.8-omni-flash`, `glm-5.3`,
-  `glm-5.3-flash`, `kimi-k2.7-code` (always reasons), `kimi-k3`.
+  `deepseek-v4.1-flash` (and its `-1017` refresh), `qwen3.8-flash`,
+  `qwen3.8-omni-flash`, `glm-5.3`, `glm-5.3-flash`, `kimi-k2.7-code` (always
+  reasons), `kimi-k3`.
 - `gemini-3.1-flash-lite` — OpenRouter, or native Google (`provider: "google"`).
 - `glm-5.2` — OpenRouter, or native Z.ai (`provider: "zai"`, e.g. a GLM Coding Plan key).
 

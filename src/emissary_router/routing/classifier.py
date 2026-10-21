@@ -5,8 +5,14 @@ import os
 
 import httpx
 
-from emissary_router.catalog import ROUTER_API_KEY_ENV
+from emissary_router.catalog import CLASSIFIER_KEY_ENV, ROUTER_API_KEY_ENV
 from emissary_router.config import RouterConfig
+
+
+def classifier_api_key() -> str | None:
+    """The key sent to the classification endpoint: EMISSARY_CLASSIFIER_KEY when set
+    (a key dedicated to classification), else EMISSARY_ROUTER_API_KEY."""
+    return os.environ.get(CLASSIFIER_KEY_ENV) or os.environ.get(ROUTER_API_KEY_ENV) or None
 
 
 class ClassifierClient:
@@ -15,7 +21,7 @@ class ClassifierClient:
 
     async def predict(self, classifier_input: str) -> dict[str, float]:
         headers = {"Content-Type": "application/json"}
-        api_key = os.environ.get(ROUTER_API_KEY_ENV)
+        api_key = classifier_api_key()
         if api_key:
             headers["X-API-Key"] = api_key
         payload = {

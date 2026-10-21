@@ -17,6 +17,12 @@ from emissary_router.schemas import AnthropicRequest, RequestContext, RouteDecis
 from emissary_router.providers.registry import build_provider
 from emissary_router.routing.classifier import ClassifierClient
 from emissary_router.routing.labels import HeadPick, collapse_effort_heads, has_effort_heads
+from emissary_router.tool_choice import (
+    REJECTS_FORCED_TOOL_CHOICE,
+    forces_tool_choice,
+    unsupported_tool_choice_message,
+    unsupported_tool_choice_payload,
+)
 from emissary_router.providers.thinking import (
     always_on_reasoning_models,
     extract_reasoning_settings,
@@ -151,6 +157,16 @@ class RouterPipeline:
                 )
         model = self._config.resolve_model(decision.model_name)
         provider = self._providers[model.provider]
+        if decision.model_name in REJECTS_FORCED_TOOL_CHOICE and forces_tool_choice(body):
+            # Served by a model that 400s on a forced tool call: answer in our own
+            # words before the provider does (tool_choice.py).
+            self._record_failure(
+                request_id, started_at, body, session_id, call_kind, decision.model_name, 400,
+            )
+            return JSONResponse(
+                unsupported_tool_choice_payload(unsupported_tool_choice_message(decision.model_name)),
+                status_code=400,
+            )
         # Served off a per-effort head with effort routing on: force the rung the
         # classifier vouched for (None when no rung cleared the gate — the request
         # then goes out untouched, at the client's effort or the provider default).

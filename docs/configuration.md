@@ -68,10 +68,10 @@ providers, and its `cost_score`. Routing scans enabled models cheapest-first, wh
 reordering the catalog can't change routing. Cheapest → most expensive today:
 
 1. `deepseek-v4-flash` / `deepseek-v4-flash-0731`
-2. `gpt-6-luna`
+2. `gpt-6-luna` / `claude-haiku-5.5`
 3. `qwen3.8-flash` / `qwen3.8-omni-flash`
 4. `glm-5.3-flash`
-5. `deepseek-v4.1-flash`
+5. `deepseek-v4.1-flash` / `deepseek-v4.1-flash-1017`
 6. `gpt-5.6-luna`
 7. `gemini-3.1-flash-lite`
 8. `kimi-k2.7-code`
@@ -82,6 +82,7 @@ reordering the catalog can't change routing. Cheapest → most expensive today:
 13. `kimi-k3`
 14. `claude-opus-5.5` / `gpt-5.6-sol`
 15. `claude-opus-5`
+16. `gpt-6-astra` / `claude-fable-5.1`
 
 Prices (and so this order) mirror the platform gateway's catalog; see
 [pricing](pricing.md).
@@ -94,11 +95,16 @@ only how the request is delivered changes.
 
 | Model                                              | Providers (recommended first) |
 | -------------------------------------------------- | ----------------------------- |
-| `claude-opus-5`, `claude-opus-5.5`, `claude-sonnet-5`, `claude-sonnet-5.5`, `claude-haiku-4.5` | `anthropic`, `openrouter` |
-| `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol`, `gpt-6-luna`, `gpt-6-sol`, `gpt-6.1-sol` | `openai`, `openrouter` |
+| `claude-opus-5`, `claude-opus-5.5`, `claude-sonnet-5`, `claude-sonnet-5.5`, `claude-haiku-4.5`, `claude-haiku-5.5`, `claude-fable-5.1` | `anthropic`, `openrouter` |
+| `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol`, `gpt-6-luna`, `gpt-6-sol`, `gpt-6.1-sol`, `gpt-6-astra` | `openai`, `openrouter` |
 | `gemini-3.1-flash-lite`                            | `openrouter`, `google`        |
 | `glm-5.2`                                          | `openrouter`, `zai`           |
-| `glm-5.3`, `glm-5.3-flash`, `kimi-k2.7-code`, `kimi-k3`, `deepseek-v4-flash`, `deepseek-v4-flash-0731`, `deepseek-v4.1-flash`, `qwen3.8-flash`, `qwen3.8-omni-flash` | `openrouter` |
+| `glm-5.3`, `glm-5.3-flash`, `kimi-k2.7-code`, `kimi-k3`, `deepseek-v4-flash`, `deepseek-v4-flash-0731`, `deepseek-v4.1-flash`, `deepseek-v4.1-flash-1017`, `qwen3.8-flash`, `qwen3.8-omni-flash` | `openrouter` |
+
+`deepseek-v4.1-flash-1017` is sent with an OpenRouter host preference
+(`provider.order: ["fireworks"]`, fallbacks allowed): its per-effort classifier heads
+were labelled on Fireworks, and OpenRouter's other hosts accept the effort field
+without all honoring it.
 
 `zai` is Z.ai's native Anthropic-compatible endpoint (`ZAI_API_KEY`, e.g. a GLM
 Coding Plan key). Unlike OpenRouter's multi-host routing it serves from one place,
@@ -293,6 +299,9 @@ Where to get each key:
 
 - `EMISSARY_ROUTER_API_KEY` — the Emissary classifier key that powers routing. Sign up
   at https://withemissary.com and create one (Dashboard > Settings > Credentials).
+  Optional `EMISSARY_CLASSIFIER_KEY`: when set, the classification endpoint is called
+  with this key instead, so `EMISSARY_ROUTER_API_KEY` can stay reserved for the
+  platform router itself (either variable satisfies `er validate-config`).
 - `ANTHROPIC_API_KEY` — the [Anthropic Console](https://console.anthropic.com/settings/keys),
   for models served directly by Anthropic.
 - `OPENROUTER_API_KEY` — [OpenRouter](https://openrouter.ai/keys), for models served via
