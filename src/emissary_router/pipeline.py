@@ -102,7 +102,11 @@ class RouterPipeline:
         # This is also what lets a config serve models the classifier has no head
         # for (e.g. the benchmark-only openrouter-auto / cloudflare-auto passthroughs).
         enabled = self._config.enabled_models()
-        if len(enabled) == 1 and self._config.default == enabled[0]:
+        if (
+            len(enabled) == 1 
+            and self._config.default == enabled[0]
+            and not self._config.models[enabled[0]].effort_routing
+        ):
             decision = self._default_decision(reason="single_model")
         else:
             # When the router classifier is unreachable (retries already exhausted
