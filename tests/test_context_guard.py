@@ -17,7 +17,7 @@ PLATFORM_WINDOWS = {
     "gpt-5.6-luna": 1_050_000, "gemini-3.1-flash-lite": 1_000_000, "kimi-k2.7-code": 262_000,
     "claude-haiku-4.5": 200_000, "glm-5.2": 1_048_576, "glm-5.3": 1_048_576, "glm-5.3-flash": 1_048_576,
     "gpt-5.6-terra": 1_050_000, "claude-sonnet-5": 1_000_000, "claude-sonnet-5.5": 1_000_000,
-    "gpt-6-sol": 1_050_000, "gpt-6.1-sol": 1_050_000, "kimi-k3": 1_048_576, "gpt-5.6-sol": 1_050_000,
+    "gpt-6-sol": 1_050_000, "gpt-6.1-sol": 1_050_000, "gpt-6.1-terra": 1_050_000, "kimi-k3": 1_048_576, "gpt-5.6-sol": 1_050_000,
     "claude-opus-5.5": 1_000_000, "claude-opus-5": 1_000_000,
 }
 

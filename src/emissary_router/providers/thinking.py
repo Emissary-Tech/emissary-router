@@ -250,6 +250,15 @@ THINKING_CAPABILITIES = {
         max_effort="max",
         supported_efforts=("none", "low", "medium", "high", "xhigh", "max"),
     ),
+    # gpt-6.1-terra (live 2026-10-29): unlike gpt-6.1-sol it keeps "none" (200 with
+    # 0 reasoning tokens); minimal 400; default medium; temperature / top_p 400 like
+    # the rest of the gpt-6 series.
+    "gpt-6.1-terra": ModelThinkingCapabilities(
+        accepts_effort_param=True,
+        accepts_adaptive_thinking=False,
+        max_effort="max",
+        supported_efforts=("none", "low", "medium", "high", "xhigh", "max"),
+    ),
     # gpt-6.1-sol drops "none" from the vocabulary (live: 400 "Supported values
     # are: low, medium, high, xhigh, and max"), so a disable snaps to low.
     "gpt-6.1-sol": ModelThinkingCapabilities(

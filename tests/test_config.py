@@ -95,6 +95,7 @@ def test_catalog_contains_supported_models() -> None:
         "claude-sonnet-5.5",
         "gpt-6-sol",
         "gpt-6.1-sol",
+        "gpt-6.1-terra",
         "kimi-k3",
         "gpt-5.6-sol",
         "claude-opus-5.5",
@@ -140,6 +141,7 @@ def test_routing_order_is_by_price_not_dict_order(monkeypatch: pytest.MonkeyPatc
         "glm-5.2",                  # 5.80
         "glm-5.3",                  # 5.80
         "claude-haiku-4.5",         # 6.00
+        "gpt-6.1-terra",            # 6.00 (name tie-break with claude-haiku-4.5)
         "claude-sonnet-5",          # 12.0
         "claude-sonnet-5.5",        # 12.0
         "gpt-6-sol",                # 12.0

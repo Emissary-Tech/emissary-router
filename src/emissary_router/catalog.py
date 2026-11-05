@@ -153,6 +153,16 @@ CATALOG: dict[str, ModelSpec] = {
         pricing=_price(1.00, 5.00, 0.10, 1.25),
         context_window=200_000,
     ),
+    # gpt-6.1-terra (platform v13, live 2026-10-29): the GPT-6.1 mid tier, $1/$5,
+    # cache read 5% / write 1.25x like the rest of the gpt-6 series. Plain head only
+    # (no @effort arms). Added 2026-11-06 for the sonnet-5.5 savings rows.
+    "gpt-6.1-terra": ModelSpec(
+        name="gpt-6.1-terra",
+        providers={"openai": "gpt-6.1-terra", "openrouter": "openai/gpt-6.1-terra"},
+        default_provider="openai",
+        pricing=_price(1.00, 5.00, 0.05, 1.25),
+        context_window=1_050_000,
+    ),
     "glm-5.2": ModelSpec(
         name="glm-5.2",
         # OpenRouter by default; "zai" is Z.ai's native Anthropic-compatible endpoint
